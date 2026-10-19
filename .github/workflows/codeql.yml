@@ -34,3 +34,6 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           category: '/language:python'
+          # Default CodeQL setup already uploads alerts for this repository.
+          # Run this analysis without a conflicting second SARIF upload.
+          upload: false
