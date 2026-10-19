@@ -1,6 +1,8 @@
 name: DPN Windows Package
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     tags: ['v*']
