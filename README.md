@@ -49,6 +49,7 @@ In PowerShell, open the extracted folder and run:
 ```powershell
 py -3 dpn_system_optimizer.py --help
 py -3 dpn_system_optimizer.py diagnose
+py -3 dpn_system_optimizer.py diagnose --json  # machine-readable output for automation
 py -3 dpn_system_optimizer.py startup
 py -3 dpn_system_optimizer.py preview
 py -3 dpn_system_optimizer.py preview --categories user_temp shader_cache --age-hours 72
