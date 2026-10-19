@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from dpn_optimizer.cleaner import (Root, _safe_root, clean_root, human_bytes,
-                                   run_cleanup, roots_for)
+                                   run_cleanup, roots_for, file_age)
 from dpn_optimizer.diagnostics import performance_advice
 from dpn_optimizer.cli import make_parser
 from dpn_optimizer import scheduler
@@ -26,6 +26,11 @@ class CleanerSafetyTests(unittest.TestCase):
         os.utime(self.old, (time.time() - 200000, time.time() - 200000))
         self.cutoff = time.time() - 48 * 3600
         self.folder = Root('user_temp', 'Test Temp', self.root)
+        # Windows st_ctime is file creation time; fresh test fixtures must
+        # simulate an existing old file to exercise deletion deterministically.
+        mtime_only = patch('dpn_optimizer.cleaner.file_age', side_effect=lambda st: st.st_mtime)
+        mtime_only.start()
+        self.addCleanup(mtime_only.stop)
 
     def test_preview_does_not_delete(self):
         result = clean_root(self.folder, cutoff=self.cutoff, apply=False)
@@ -162,6 +167,11 @@ class CleanerSafetyTests(unittest.TestCase):
 
 
 class AuxiliaryTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows creation-time safeguard')
+    def test_windows_ctime_guard(self):
+        from types import SimpleNamespace
+        self.assertEqual(file_age(SimpleNamespace(st_ctime=200, st_mtime=100)), 200)
+
     def test_human_bytes(self):
         self.assertEqual(human_bytes(1024), '1.0 KB')
 
@@ -180,9 +190,10 @@ class AuxiliaryTests(unittest.TestCase):
         self.assertEqual(args.categories, ['user_temp'])
 
     def test_scheduler_rejects_bad_time(self):
+        missing_path = Path('not-present')
         with patch('dpn_optimizer.scheduler.os.name', 'nt'):
             with self.assertRaises(ValueError):
-                scheduler.install_daily(Path('not-present'), '25:80')
+                scheduler.install_daily(missing_path, '25:80')
 
     def test_scheduler_command_limited_scope(self):
         with tempfile.TemporaryDirectory() as td:
