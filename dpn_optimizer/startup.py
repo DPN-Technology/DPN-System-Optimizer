@@ -6,6 +6,25 @@ from pathlib import Path
 from typing import Any
 
 
+_POTENTIALLY_HIGH_IMPACT = (
+    "onedrive", "dropbox", "google drive", "icloud", "teams", "discord",
+    "slack", "zoom", "webex", "steam", "epic games", "spotify",
+    "creative cloud",
+)
+
+
+def assess_startup_item(name: str, command: str) -> dict[str, str]:
+    """Give cautious heuristic labels; startup time and signer are not measured."""
+    searchable = f"{name} {command}".casefold()
+    impact = "Potentially high" if any(
+        app in searchable for app in _POTENTIALLY_HIGH_IMPACT
+    ) else "Unrated"
+    return {
+        "impact": impact,
+        "publisher": "Unknown (not verified)",
+    }
+
+
 def list_startup_items() -> list[dict[str, Any]]:
     if os.name != "nt":
         return []
@@ -33,8 +52,10 @@ def list_startup_items() -> list[dict[str, Any]]:
                         if marker in seen:
                             continue
                         seen.add(marker)
+                        command_text = str(command)[:400]
                         items.append({"source": name + " Run key", "name": label,
-                                      "command": str(command)[:400]})
+                                      "command": command_text,
+                                      **assess_startup_item(label, command_text)})
             except OSError:
                 continue
     folder_candidates = (
@@ -47,8 +68,10 @@ def list_startup_items() -> list[dict[str, Any]]:
         try:
             for child in folder.iterdir():
                 if child.is_file() and not child.is_symlink():
+                    command = "Shortcut/file in Startup folder (not executed)"
                     items.append({"source": label, "name": child.name,
-                                  "command": "Shortcut/file in Startup folder (not executed)"})
+                                  "command": command,
+                                  **assess_startup_item(child.name, command)})
         except OSError:
             continue
     return sorted(items, key=lambda i: (i["source"], i["name"].lower()))

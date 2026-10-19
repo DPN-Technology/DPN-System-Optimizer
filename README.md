@@ -19,11 +19,12 @@ System Optimizer is a local-first Windows maintenance tool with a red-and-black 
 
 | Module | Implemented behavior |
 | --- | --- |
-| Performance dashboard | Sampled CPU usage with psutil, RAM, disk, top processes by RAM, guidance. Updates every 5 seconds while GUI is open. |
+| Performance dashboard | Sampled CPU usage with psutil, RAM, disk, top processes by RAM, guidance, two-minute sparklines, and a snapshot headroom score. Updates every 5 seconds while GUI is open. The score averages available CPU, RAM, and disk headroom; it is not a diagnosis or long-term health rating. |
 | User temp cleaner | Ages files before eligibility (default 48 hours); skips recently changed files, symlinks/junctions, inaccessible/locked files. |
 | Optional cache cleanup | DirectX shader cache; explicitly selected Windows Error Reporting files and user crash dumps; Chrome/Edge *cache files only* if all browsers are closed. |
 | Windows temp | Explicitly selected; may require admin. Never on by default. |
-| Startup analyzer | Read-only inventory of Run/RunOnce values and Startup-folder files, including machine-wide keys when accessible. |
+| Disk Space Map | Read-only scan of your user profile, Downloads, Documents, or system drive that ranks the largest folders with bar charts and lists the 25 largest files, with an *Open Folder* button. Symlinks/junctions are never followed, the scan can be stopped, and system-drive scans stop after 45 seconds (results are then marked partial). It never deletes or changes anything. |
+| Startup analyzer | Read-only inventory of Run/RunOnce values and Startup-folder files, including machine-wide keys when accessible. Recognizable sync, chat, and launcher apps are flagged as potentially high impact using a cautious name-based heuristic; it does not measure boot time or verify publisher signatures, so publisher status is shown as unknown. |
 | Windows health | Manually triggered `sfc /verifyonly` or `DISM /Online /Cleanup-Image /ScanHealth`, no automatic repair. |
 | Scheduler | Opt-in task using Windows Task Scheduler. Daily **user temp only**, 48+ hours old, limited privileges; you specify its local time. |
 | Local reports | A JSON file per preview/cleanup showing category counts and deleted bytes; no individual scanned filenames or content. |
@@ -104,6 +105,8 @@ Approved cleanup roots are enumerated by code; the user cannot supply an arbitra
 - `dpn_optimizer/startup.py` — startup inventory
 - `dpn_optimizer/scheduler.py` — optional Task Scheduler integration
 - `dpn_optimizer/health.py` — read-only Windows system verification
+- `dpn_optimizer/diskmap.py` — read-only disk space analysis
+- `dpn_optimizer/assets/` — DPN logo (sourced from the DPN-Technology GitHub organization avatar) in sizes used by the window icon, sidebar and splash
 - `dpn_optimizer/gui.py` — Tkinter desktop interface
 - `dpn_optimizer/cli.py` — commands
 - `START_DPN_OPTIMIZER.bat` — GUI launcher

@@ -92,8 +92,11 @@ def main(argv: list[str] | None = None, script_path: Path | None = None) -> int:
             print("Windows only.")
             return 2
         for item in list_startup_items():
-            print(f"[{item['source']}] {item['name']} -> {item['command']}")
-        print("Read-only. Use Windows Settings > Apps > Startup to disable unwanted entries.")
+            print(f"[{item['source']}] [{item['impact']}] [{item['publisher']}] "
+                  f"{item['name']} -> {item['command']}")
+        print("Read-only. Impact is a cautious app-name heuristic, not measured boot time. "
+              "Publisher signatures are not verified. Use Windows Settings > Apps > Startup "
+              "to disable unwanted entries.")
         return 0
     if args.command in ("preview", "clean"):
         if os.name != "nt":

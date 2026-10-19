@@ -1,0 +1,21 @@
+"""DPN black-and-red design tokens shared by the window, widgets and splash."""
+from __future__ import annotations
+
+BG = "#050506"
+SIDE = "#08080A"
+PANEL = "#0F0F12"
+PANEL2 = "#17171B"
+PANEL3 = "#222228"
+TERMINAL = "#08080A"
+LINE = "#2A1114"
+RED = "#E10600"
+RED_HOT = "#FF3B2F"
+RED_DIM = "#6E0B08"
+WHITE = "#F3F6FA"
+MUTED = "#8D96A3"
+GREEN = "#47CCA5"
+AMBER = "#F2B84B"
+
+FONT = "Segoe UI"
+FONT_BOLD = "Segoe UI Semibold"
+MONO = "Consolas"

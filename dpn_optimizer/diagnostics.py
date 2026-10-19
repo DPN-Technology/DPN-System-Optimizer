@@ -13,6 +13,21 @@ except ImportError:
     psutil = None
 
 
+def performance_health_score(snapshot: dict[str, Any]) -> int | None:
+    """Return a simple headroom score for the available CPU, RAM, and disk samples."""
+    usage = []
+    if snapshot.get("cpu") is not None:
+        usage.append(snapshot["cpu"])
+    if snapshot.get("ram") is not None:
+        usage.append(snapshot["ram"]["percent"])
+    if snapshot.get("disk") is not None:
+        usage.append(snapshot["disk"]["percent"])
+    if not usage:
+        return None
+    headroom = [100 - max(0.0, min(100.0, float(value))) for value in usage]
+    return round(sum(headroom) / len(headroom))
+
+
 def performance_snapshot() -> dict[str, Any]:
     disk_root = Path(os.environ.get("SystemDrive", "C:") + "\\") if os.name == "nt" else Path.home()
     try:

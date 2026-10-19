@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import queue
+import random
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -11,19 +13,21 @@ from typing import Any, Callable
 
 from . import __version__
 from .cleaner import CATEGORIES, DEFAULT_CATEGORIES, human_bytes, list_reports, reports_path, run_cleanup
-from .diagnostics import performance_advice, performance_snapshot
+from .diagnostics import performance_advice, performance_health_score, performance_snapshot
+from .diskmap import scan_disk_usage
 from .startup import list_startup_items
 from . import scheduler, health
 
-BG = "#080B12"
-SIDE = "#0D111B"
-PANEL = "#131925"
-PANEL2 = "#1B2431"
-LINE = "#2B3444"
-RED = "#EA353F"
+BG = "#050505"
+SIDE = "#0A0A0A"
+PANEL = "#111111"
+PANEL2 = "#1A1A1A"
+LINE = "#3A1216"
+RED = "#E10600"
 WHITE = "#F3F6FA"
 MUTED = "#93A1B3"
 GREEN = "#47CCA5"
+ASSETS = Path(__file__).resolve().parent / "assets"
 
 
 class DPNWindow:
@@ -34,6 +38,8 @@ class DPNWindow:
         self.root.geometry("1120x760")
         self.root.minsize(930, 660)
         self.root.configure(bg=BG)
+        self._images: list[tk.PhotoImage] = []
+        self._set_window_icon()
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.busy = False
         self._poll_job = None
@@ -42,11 +48,16 @@ class DPNWindow:
         self.buttons: dict[str, tk.Button] = {}
         self.pages: dict[str, tk.Frame] = {}
         self.metrics: dict[str, tk.Label] = {}
+        self.metric_history: dict[str, list[float]] = {
+            name: [] for name in ("CPU UTILIZATION", "PHYSICAL MEMORY", "SYSTEM DRIVE")
+        }
+        self.sparklines: dict[str, tk.Canvas] = {}
         self.choice = {key: tk.IntVar(value=int(key in DEFAULT_CATEGORIES)) for key in CATEGORIES}
         self.age = tk.StringVar(value="48")
         self.schedule_time = tk.StringVar(value="09:00")
         self._configure_style()
         self._layout()
+        self._show_boot_splash()
         self.root.after(250, self._consume_events)
         self.root.after(300, self._poll_performance)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -64,6 +75,26 @@ class DPNWindow:
         sty.map("DPN.Treeview.Heading", background=[("active", "#2A3543")])
         sty.configure("DPN.Horizontal.TProgressbar", background=RED, troughcolor=PANEL2,
                       bordercolor=PANEL, lightcolor=RED, darkcolor=RED)
+        sty.configure("TCombobox", fieldbackground=PANEL2, background=PANEL2, foreground=WHITE,
+                      arrowcolor=RED, bordercolor=LINE, lightcolor=PANEL2, darkcolor=PANEL2)
+        sty.map("TCombobox", fieldbackground=[("readonly", PANEL2)],
+                foreground=[("readonly", WHITE)], background=[("readonly", PANEL2)])
+        self.root.option_add("*TCombobox*Listbox.background", PANEL2)
+        self.root.option_add("*TCombobox*Listbox.foreground", WHITE)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", RED)
+
+    def _load_logo(self, filename: str) -> tk.PhotoImage | None:
+        try:
+            image = tk.PhotoImage(file=str(ASSETS / filename))
+        except tk.TclError:
+            return None
+        self._images.append(image)
+        return image
+
+    def _set_window_icon(self) -> None:
+        icon = self._load_logo("dpn_logo_icon.png")
+        if icon is not None:
+            self.root.iconphoto(True, icon)
 
     def _text(self, parent: tk.Widget, value: str, size: int = 10,
               color: str = WHITE, bold: bool = False, **kwargs: Any) -> tk.Label:
@@ -94,22 +125,25 @@ class DPNWindow:
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
         tk.Frame(self.sidebar, bg=RED, height=5).pack(fill="x")
-        title = tk.Frame(self.sidebar, bg=SIDE, padx=19, pady=23)
+        title = tk.Frame(self.sidebar, bg=SIDE, padx=19, pady=14)
         title.pack(fill="x")
-        self._text(title, "DPN // TECHNOLOGY", 10, RED, True).pack(anchor="w")
-        self._text(title, "SYSTEM", 22, WHITE, True).pack(anchor="w", pady=(13, 0))
-        self._text(title, "OPTIMIZER", 22, WHITE, True).pack(anchor="w")
-        self._text(title, "v2.0 · LOCAL-FIRST", 9, MUTED).pack(anchor="w", pady=(6, 0))
-        tk.Frame(self.sidebar, bg=LINE, height=1).pack(fill="x", padx=18, pady=(0, 18))
-        for tab in ("Dashboard", "Cleaner", "Startup", "Automation", "Windows Health", "Reports"):
+        logo = self._load_logo("dpn_logo_sidebar.png")
+        if logo is not None:
+            tk.Label(title, image=logo, bg=SIDE, bd=0).pack(anchor="center")
+        else:
+            self._text(title, "DPN // TECHNOLOGY", 10, RED, True).pack(anchor="w")
+        self._text(title, "SYSTEM OPTIMIZER", 13, WHITE, True).pack(anchor="center", pady=(8, 0))
+        self._text(title, "v2.0 · LOCAL-FIRST", 9, MUTED).pack(anchor="center", pady=(2, 0))
+        tk.Frame(self.sidebar, bg=LINE, height=1).pack(fill="x", padx=18, pady=(0, 10))
+        for tab in ("Dashboard", "Cleaner", "Disk Map", "Startup", "Automation", "Windows Health", "Reports"):
             btn = tk.Button(self.sidebar, text="  ▸  " + tab, anchor="w", fg=WHITE,
                             bg=SIDE, relief="flat", bd=0, highlightthickness=0, activebackground=PANEL2,
-                            activeforeground=WHITE, padx=15, pady=12,
+                            activeforeground=WHITE, padx=15, pady=8,
                             cursor="hand2", font=("Segoe UI", 11),
                             command=lambda tab=tab: self.show(tab))
-            btn.pack(fill="x", padx=9, pady=2)
+            btn.pack(fill="x", padx=9, pady=1)
             self.buttons[tab] = btn
-        tk.Frame(self.sidebar, bg=LINE, height=1).pack(fill="x", padx=18, pady=(24, 10))
+        tk.Frame(self.sidebar, bg=LINE, height=1).pack(fill="x", padx=18, pady=(14, 8))
         self._text(self.sidebar, "SAFE BY DESIGN", 9, GREEN, True).pack(anchor="w", padx=20)
         self._text(self.sidebar, "Preview-first · No telemetry\nNo registry cleanup", 9, MUTED).pack(
             anchor="w", padx=20, pady=(6, 0))
@@ -122,6 +156,7 @@ class DPNWindow:
                                font=("Segoe UI Semibold", 9))
         self.status.pack(side="right")
         tk.Frame(self.main, height=1, bg=LINE).pack(fill="x")
+        self._binary_rain(self.main)
         container = tk.Frame(self.main, bg=BG)
         container.pack(fill="both", expand=True, padx=27, pady=23)
         for tab in self.buttons:
@@ -130,11 +165,112 @@ class DPNWindow:
             self.pages[tab] = page
         self._dashboard(self.pages["Dashboard"])
         self._cleaner(self.pages["Cleaner"])
+        self._disk_map(self.pages["Disk Map"])
         self._startup(self.pages["Startup"])
         self._automation(self.pages["Automation"])
         self._health(self.pages["Windows Health"])
         self._reports(self.pages["Reports"])
         self.show("Dashboard")
+
+    def _show_boot_splash(self) -> None:
+        self.boot_splash = tk.Frame(
+            self.root, bg=BG, highlightthickness=1, highlightbackground=LINE
+        )
+        self.boot_splash.place(x=0, y=0, relwidth=1, relheight=1)
+        self.boot_splash.lift()
+
+        splash_logo = self._load_logo("dpn_logo_splash.png")
+        if splash_logo is not None:
+            tk.Label(self.boot_splash, image=splash_logo, bg=BG, bd=0).place(
+                relx=0.5, rely=0.28, anchor="center")
+        else:
+            self._text(self.boot_splash, "DPN // TECHNOLOGY", 10, RED, True).place(
+                relx=0.5, rely=0.28, anchor="center")
+        self.boot_title = self._text(self.boot_splash, "", 24, WHITE, True)
+        self.boot_title.configure(anchor="center", justify="center")
+        self.boot_title.place(relx=0.5, rely=0.56, anchor="center")
+        self.boot_binary = self._text(self.boot_splash, "", 11, RED, True)
+        self.boot_binary.configure(
+            anchor="center", justify="center", font=("Consolas", 11, "bold")
+        )
+        self.boot_binary.place(relx=0.5, rely=0.63, anchor="center")
+
+        self.boot_progress = tk.Canvas(
+            self.boot_splash, width=270, height=3, bg=PANEL2, highlightthickness=0
+        )
+        self.boot_progress.place(relx=0.5, rely=0.69, anchor="center")
+        self.boot_bar = self.boot_progress.create_rectangle(0, 0, 0, 3, fill=RED, width=0)
+        self.boot_status = self._text(
+            self.boot_splash, "INITIALIZING LOCAL DIAGNOSTICS", 9, MUTED, True
+        )
+        self.boot_status.configure(anchor="center", justify="center")
+        self.boot_status.place(relx=0.5, rely=0.74, anchor="center")
+        self._boot_splash_dismissing = False
+        self._boot_splash_tick(0)
+        self.root.after(1650, self._dismiss_boot_splash)
+
+    def _boot_splash_tick(self, frame: int) -> None:
+        if (self._boot_splash_dismissing or not self.root.winfo_exists()
+                or not self.boot_splash.winfo_exists()):
+            return
+
+        title = "SYSTEM OPTIMIZER"
+        resolved = min(len(title), max(0, frame - 8))
+        scramble = "".join(
+            char if index < resolved or char == " " else random.choice("01ABCDEF")
+            for index, char in enumerate(title)
+        )
+        self.boot_title.configure(text=scramble)
+        self.boot_binary.configure(
+            text="  ".join("".join(random.choice("01") for _ in range(4)) for _ in range(8))
+        )
+        self.boot_progress.coords(self.boot_bar, 0, 0, 270 * min(frame / 24, 1), 3)
+        if frame >= 8:
+            self.boot_status.configure(text="LOADING SYSTEM MODULES")
+        if frame >= 17:
+            self.boot_status.configure(text="READY // LOCAL-FIRST")
+        if frame >= 29:
+            self._dismiss_boot_splash()
+            return
+        self.root.after(55, self._boot_splash_tick, frame + 1)
+
+    def _dismiss_boot_splash(self) -> None:
+        if not self.boot_splash.winfo_exists():
+            return
+        self._boot_splash_dismissing = True
+        self.boot_title.configure(text="SYSTEM OPTIMIZER")
+        self.boot_status.configure(text="READY // LOCAL-FIRST")
+        self.root.after(150, self.boot_splash.destroy)
+
+    def _binary_rain(self, parent: tk.Widget) -> None:
+        self.rain = tk.Canvas(parent, height=56, bg=BG, highlightthickness=0)
+        self.rain.pack(fill="x")
+        self.rain_cols: list[list[Any]] = []
+        self.rain_fade = ("#2A0605", "#5C0A07", "#A10D08", RED)
+        self.rain.bind("<Configure>", self._rain_resize)
+        self.root.after(120, self._rain_tick)
+
+    def _rain_resize(self, event: tk.Event) -> None:
+        count = max(1, event.width // 14)
+        while len(self.rain_cols) < count:
+            self.rain_cols.append([random.randint(-4, 3), random.randint(0, 3)])
+        del self.rain_cols[count:]
+
+    def _rain_tick(self) -> None:
+        if self.root.winfo_exists():
+            self.rain.delete("all")
+            for i, col in enumerate(self.rain_cols):
+                col[0] += 1
+                if col[0] > 6:
+                    col[0] = random.randint(-6, 0)
+                for t in range(4):
+                    row = col[0] - (3 - t)
+                    if 0 <= row < 4:
+                        self.rain.create_text(i * 14 + 7, row * 14 + 7, text=random.choice("01"),
+                                              fill=self.rain_fade[t], font=("Consolas", 10, "bold"))
+            self.rain.create_text(self.rain.winfo_width() - 12, 28, text="DPN // 1011 0100",
+                                  fill=WHITE, anchor="e", font=("Consolas", 11, "bold"))
+            self._rain_job = self.root.after(140, self._rain_tick)
 
     def show(self, name: str) -> None:
         self.page = name
@@ -175,12 +311,25 @@ class DPNWindow:
             subtitle = self._text(panel, "Monitoring", 9, MUTED)
             subtitle.pack(anchor="w")
             self.metrics[name + " subtitle"] = subtitle
+            sparkline = tk.Canvas(panel, height=25, bg=PANEL, highlightthickness=0)
+            sparkline.pack(fill="x", pady=(7, 0))
+            self.sparklines[name] = sparkline
         notes = self._panel(page, 13, 10)
         notes.pack(fill="x", pady=(14, 14))
-        self._text(notes, "SYSTEM INTELLIGENCE", 10, RED, True).pack(anchor="w")
-        self.advice = self._text(notes, "Checking resource health…", 10, WHITE,
+        intelligence = tk.Frame(notes, bg=PANEL)
+        intelligence.pack(fill="x")
+        self.health_gauge = tk.Canvas(
+            intelligence, width=82, height=82, bg=PANEL, highlightthickness=0
+        )
+        self.health_gauge.pack(side="left", padx=(0, 14))
+        self.advice_panel = tk.Frame(intelligence, bg=PANEL)
+        self.advice_panel.pack(side="left", fill="x", expand=True)
+        self._text(self.advice_panel, "SYSTEM INTELLIGENCE // SNAPSHOT SCORE",
+                   10, RED, True).pack(anchor="w")
+        self.advice = self._text(self.advice_panel, "Checking resource health…", 10, WHITE,
                                  wraplength=685)
         self.advice.pack(anchor="w", pady=(7, 0), fill="x")
+        self._draw_health_gauge(None)
         processes = self._panel(page, 12, 10)
         processes.pack(fill="both", expand=True)
         row = tk.Frame(processes, bg=PANEL)
@@ -277,28 +426,165 @@ class DPNWindow:
         self.preview_button.configure(state="normal")
         self.clean_button.configure(state="normal")
 
+    def _disk_map(self, page: tk.Frame) -> None:
+        self._page_title(page, "Disk Space Map",
+                         "Read-only scan showing which folders and files use the most space. Nothing is deleted or modified.")
+        self.disk_busy = False
+        self.disk_cancel = threading.Event()
+        self.disk_locations = {
+            "User profile": Path.home(),
+            "Downloads": Path.home() / "Downloads",
+            "Documents": Path.home() / "Documents",
+            "System drive (slow, 45s cap)": Path(os.environ.get("SystemDrive", "C:") + "\\"),
+        }
+        self.disk_choice = tk.StringVar(value="User profile")
+        controls = tk.Frame(page, bg=BG)
+        controls.pack(fill="x")
+        self._text(controls, "LOCATION", 9, MUTED, True).pack(side="left")
+        picker = ttk.Combobox(controls, textvariable=self.disk_choice, state="readonly", width=30,
+                              values=list(self.disk_locations))
+        picker.pack(side="left", padx=12)
+        self.disk_scan_button = self._button(controls, "Scan Space Usage", self._start_disk_scan, primary=True)
+        self.disk_scan_button.pack(side="left")
+        self.disk_stop_button = self._button(controls, "Stop", self.disk_cancel.set)
+        self.disk_stop_button.pack(side="left", padx=8)
+        self.disk_status = self._text(controls, "Not scanned yet.", 9, MUTED)
+        self.disk_status.pack(side="right")
+
+        body = tk.Frame(page, bg=BG)
+        body.pack(fill="both", expand=True, pady=(14, 0))
+        body.columnconfigure(0, weight=1, uniform="disk")
+        body.columnconfigure(1, weight=1, uniform="disk")
+        body.rowconfigure(0, weight=1)
+        left = self._panel(body, 12, 10)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self._text(left, "LARGEST FOLDERS", 10, RED, True).pack(anchor="w")
+        self.disk_bars = tk.Canvas(left, bg=PANEL, highlightthickness=0)
+        self.disk_bars.pack(fill="both", expand=True, pady=(10, 0))
+        self.disk_bars.bind("<Configure>", lambda _e: self._draw_disk_bars())
+        self.disk_folders: list[dict[str, Any]] = []
+        right = self._panel(body, 12, 10)
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        header = tk.Frame(right, bg=PANEL)
+        header.pack(fill="x")
+        self._text(header, "LARGEST FILES", 10, RED, True).pack(side="left")
+        self._button(header, "Open Folder", self._open_selected_file_folder).pack(side="right")
+        self.disk_files = self._make_tree(right, ("Size", "Path"), (90, 330), height=12)
+        self.disk_file_paths: dict[str, str] = {}
+
+    def _start_disk_scan(self) -> None:
+        if self.disk_busy:
+            return
+        root = self.disk_locations[self.disk_choice.get()]
+        if not root.is_dir():
+            messagebox.showwarning("Location unavailable", f"{root} was not found.")
+            return
+        self.disk_busy = True
+        self.disk_cancel.clear()
+        self.disk_scan_button.configure(state="disabled")
+        self.disk_status.configure(text="Scanning…", fg=RED)
+
+        def worker() -> None:
+            try:
+                result = scan_disk_usage(
+                    root, cancelled=self.disk_cancel.is_set,
+                    progress=lambda n: self.events.put(("disk_progress", n)))
+                self.events.put(("disk_done", result))
+            except Exception as exc:
+                self.events.put(("disk_error", f"Disk scan failed: {exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_disk_scan(self) -> None:
+        self.disk_busy = False
+        self.disk_scan_button.configure(state="normal")
+
+    def _show_disk_result(self, result: dict[str, Any]) -> None:
+        self.disk_folders = result["folders"][:12]
+        self._draw_disk_bars()
+        self.disk_files.delete(*self.disk_files.get_children())
+        self.disk_file_paths = {}
+        for item in result["largest_files"]:
+            row = self.disk_files.insert("", "end", values=(human_bytes(item["bytes"]), item["path"]))
+            self.disk_file_paths[row] = item["path"]
+        note = " · partial (stopped early)" if result["truncated"] else ""
+        self.disk_status.configure(
+            text=(f"{human_bytes(result['total_bytes'])} in {result['files_seen']:,} files · "
+                  f"{result['errors']} unreadable{note}"), fg=MUTED)
+        self._finish_disk_scan()
+
+    def _draw_disk_bars(self) -> None:
+        canvas = self.disk_bars
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 200)
+        if not self.disk_folders:
+            canvas.create_text(10, 12, anchor="w", fill=MUTED, font=("Segoe UI", 9),
+                               text="Run a scan to map folder sizes.")
+            return
+        biggest = max(f["bytes"] for f in self.disk_folders) or 1
+        bar_left, bar_right = 150, width - 90
+        for i, folder in enumerate(self.disk_folders):
+            y = 6 + i * 30
+            canvas.create_text(0, y + 10, anchor="w", fill=WHITE, font=("Segoe UI", 9),
+                               text=folder["name"][:22])
+            canvas.create_rectangle(bar_left, y + 3, bar_right, y + 17, fill=PANEL2, outline="")
+            fill_to = bar_left + (bar_right - bar_left) * folder["bytes"] / biggest
+            canvas.create_rectangle(bar_left, y + 3, fill_to, y + 17, fill=RED, outline="")
+            canvas.create_text(width, y + 10, anchor="e", fill=MUTED, font=("Consolas", 9),
+                               text=f"{human_bytes(folder['bytes'])} {folder['percent']:.0f}%")
+
+    def _open_selected_file_folder(self) -> None:
+        selected = self.disk_files.selection()
+        if not selected or os.name != "nt":
+            return
+        path = Path(self.disk_file_paths.get(selected[0], ""))
+        if path.parent.is_dir():
+            os.startfile(path.parent)  # type: ignore[attr-defined]  # opens the folder only
+
     def _startup(self, page: tk.Frame) -> None:
         self._page_title(page, "Windows Startup Inventory",
-                         "Read-only registry and startup-folder inspection. Nothing is disabled or changed.")
+                         "Read-only inventory. Estimates use app names; publisher signatures are not verified.")
         row = tk.Frame(page, bg=BG)
         row.pack(fill="x")
-        self._text(row, "Review suspicious or unnecessary entries before changing them in Windows Settings.",
+        self._text(row, "Review entries before changing them in Windows Settings.",
                    10, MUTED).pack(side="left")
         self._button(row, "Refresh Inventory", self._load_startup).pack(side="right")
         panel = self._panel(page)
         panel.pack(fill="both", expand=True, pady=(16, 0))
-        self.startup_table = self._make_tree(panel, ("Source", "Application", "Command (read-only)"),
-                                              (145, 175, 410), height=16)
+        self.startup_table = self._make_tree(
+            panel, ("Source", "Application", "Impact (estimate)", "Publisher", "Command (read-only)"),
+            (120, 135, 115, 150, 360), height=16
+        )
+        startup_scroll = ttk.Scrollbar(panel, orient="horizontal", command=self.startup_table.xview)
+        startup_scroll.pack(fill="x", pady=(6, 0))
+        self.startup_table.configure(xscrollcommand=startup_scroll.set)
+        self.startup_table.tag_configure("potentially_high", foreground=RED)
         self.startup_count = self._text(panel, "Not scanned yet.", 9, MUTED)
         self.startup_count.pack(anchor="w", pady=(12, 0))
 
     def _load_startup(self) -> None:
         self.startup_table.delete(*self.startup_table.get_children())
         try:
-            items = list_startup_items()
+            items = sorted(
+                list_startup_items(),
+                key=lambda item: (
+                    item.get("impact") != "Potentially high",
+                    item["source"], item["name"].casefold()
+                ),
+            )
             for item in items:
-                self.startup_table.insert("", "end", values=(item["source"], item["name"], item["command"]))
-            self.startup_count.configure(text=f"{len(items)} startup entries found. Read-only.")
+                impact = item.get("impact", "Unrated")
+                self.startup_table.insert(
+                    "", "end",
+                    values=(item["source"], item["name"], impact,
+                            item.get("publisher", "Unknown (not verified)"), item["command"]),
+                    tags=("potentially_high",) if impact == "Potentially high" else (),
+                )
+            high_count = sum(item.get("impact") == "Potentially high" for item in items)
+            self.startup_count.configure(
+                text=(f"{len(items)} entries · {high_count} potentially high-impact "
+                      "estimate(s) · publishers not verified. Read-only.")
+            )
         except Exception as exc:
             self.startup_count.configure(text=f"Startup scan unavailable: {type(exc).__name__}")
 
@@ -457,6 +743,14 @@ class DPNWindow:
                 text=f"{human_bytes(mem['available'])} available" if mem else "Unavailable")
             self.metrics["SYSTEM DRIVE subtitle"].configure(
                 text=f"{human_bytes(disk['free'])} free" if disk else "Unavailable")
+            self._update_sparkline("CPU UTILIZATION", cpu)
+            self._update_sparkline(
+                "PHYSICAL MEMORY", mem["percent"] if mem else None
+            )
+            self._update_sparkline(
+                "SYSTEM DRIVE", disk["percent"] if disk else None
+            )
+            self._draw_health_gauge(performance_health_score(s))
             self.advice.configure(text="  •  ".join(performance_advice(s)))
             self.processes.delete(*self.processes.get_children())
             for p in s["top_processes"][:10]:
@@ -465,6 +759,44 @@ class DPNWindow:
             self.advice.configure(text=f"Monitoring unavailable: {type(exc).__name__}")
         if self.root.winfo_exists():
             self._poll_job = self.root.after(5000, self._poll_performance)
+
+    def _update_sparkline(self, name: str, value: float | None) -> None:
+        history = self.metric_history[name]
+        if value is not None:
+            history.append(max(0.0, min(100.0, float(value))))
+            del history[:-24]
+
+        canvas = self.sparklines[name]
+        canvas.delete("all")
+        width, height = canvas.winfo_width(), canvas.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+        canvas.create_line(0, height - 2, width, height - 2, fill=LINE)
+        if not history:
+            return
+
+        points = []
+        for index, sample in enumerate(history):
+            x = (width - 4) * index / max(len(history) - 1, 1) + 2
+            y = height - 3 - sample / 100 * (height - 6)
+            points.extend((x, y))
+        if len(history) > 1:
+            canvas.create_line(*points, fill=RED, width=2, smooth=True)
+        x, y = points[-2:]
+        canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=RED, outline=RED)
+
+    def _draw_health_gauge(self, score: int | None) -> None:
+        gauge = self.health_gauge
+        gauge.delete("all")
+        gauge.create_arc(9, 9, 73, 73, start=90, extent=-359,
+                         style="arc", outline=LINE, width=5)
+        if score is not None:
+            gauge.create_arc(9, 9, 73, 73, start=90, extent=-3.6 * score,
+                             style="arc", outline=RED, width=5)
+        gauge.create_text(41, 36, text=str(score) if score is not None else "N/A",
+                          fill=WHITE, font=("Segoe UI Semibold", 15))
+        gauge.create_text(41, 54, text="SAMPLE", fill=MUTED,
+                          font=("Segoe UI", 7, "bold"))
 
     def _consume_events(self) -> None:
         for _ in range(100):
@@ -487,6 +819,13 @@ class DPNWindow:
                 self._log(payload)
                 self._end_busy()
                 messagebox.showerror("Operation error", payload)
+            elif event == "disk_progress":
+                self.disk_status.configure(text=f"Scanning… {payload:,} files", fg=RED)
+            elif event == "disk_done":
+                self._show_disk_result(payload)
+            elif event == "disk_error":
+                self._finish_disk_scan()
+                self.disk_status.configure(text=payload, fg=RED)
             elif event == "health_done":
                 code, output = payload
                 self.health_text.configure(state="normal")
@@ -504,6 +843,7 @@ class DPNWindow:
                                        "An operation is still running. Close the window anyway?"):
                 return
             self.cancel_flag.set()
+        self.disk_cancel.set()
         self.root.destroy()
 
     def run(self) -> None:
