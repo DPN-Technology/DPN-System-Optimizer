@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import os
+import json
+import io
+from contextlib import redirect_stdout
 from pathlib import Path
 import tempfile
 import time
@@ -11,7 +14,7 @@ from unittest.mock import patch
 from dpn_optimizer.cleaner import (Root, _safe_root, clean_root, human_bytes,
                                    run_cleanup, roots_for, file_age)
 from dpn_optimizer.diagnostics import performance_advice
-from dpn_optimizer.cli import make_parser
+from dpn_optimizer.cli import make_parser, main
 from dpn_optimizer import scheduler
 
 
@@ -188,6 +191,23 @@ class AuxiliaryTests(unittest.TestCase):
         args = make_parser().parse_args(['clean'])
         self.assertFalse(args.apply)
         self.assertEqual(args.categories, ['user_temp'])
+
+    def test_diagnose_json_for_automation(self):
+        snapshot = {"os": "Test OS", "hostname": "test-machine", "disk": None,
+                    "cpu": None, "ram": None, "top_processes": [],
+                    "monitoring_available": False}
+        output = io.StringIO()
+        with patch('dpn_optimizer.cli.performance_snapshot', return_value=snapshot), \
+             redirect_stdout(output):
+            exit_code = main(['diagnose', '--json'])
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload['snapshot'], snapshot)
+        self.assertTrue(payload['recommendations'])
+
+    def test_default_diagnose_stays_human_readable(self):
+        args = make_parser().parse_args(['diagnose'])
+        self.assertFalse(args.json)
 
     def test_scheduler_rejects_bad_time(self):
         missing_path = Path('not-present')
