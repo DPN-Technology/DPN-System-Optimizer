@@ -1,0 +1,10 @@
+Copyright (c) 2026 DPN Technology. All rights reserved.
+
+This software and its source code are proprietary to DPN Technology.
+No right to copy, modify, distribute, sublicense, sell, or create derivative works
+is granted without prior written permission from DPN Technology, except as
+required by applicable law. Authorized users may run the software for internal
+purposes under terms separately agreed with DPN Technology.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, TO THE
+EXTENT PERMITTED BY APPLICABLE LAW.

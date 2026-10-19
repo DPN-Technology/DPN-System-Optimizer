@@ -1,0 +1,3 @@
+# Optional: no dependencies are required for cleanup, history, startup or scheduling.
+# This package adds CPU and per-process monitoring to the dashboard.
+psutil>=5.9,<8
