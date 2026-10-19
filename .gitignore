@@ -1,0 +1,28 @@
+# Python bytecode, test and type-check caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.venv/
+venv/
+
+# Local build outputs and machine-specific data
+build/
+dist/
+*.log
+*.tmp
+*.bak
+*.zip
+!tests/fixtures/*.zip
+.DS_Store
+Thumbs.db
+
+# Windows & IDE user settings
+.vscode/
+.idea/
+*.suo
+*.user
