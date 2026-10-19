@@ -1,4 +1,4 @@
 # Developer/CI tooling. Runtime works on Python stdlib; psutil is optional.
 ruff==0.11.13
 bandit==1.9.4
-pip-audit==2.9.0
+pip-audit==2.10.1
