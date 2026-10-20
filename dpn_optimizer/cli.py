@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import sys
@@ -35,7 +36,8 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=__version__)
     sub = p.add_subparsers(dest="command")
     sub.add_parser("gui", help="Launch the graphical dashboard")
-    sub.add_parser("diagnose", help="Display CPU/RAM/disk status and top memory processes")
+    diag = sub.add_parser("diagnose", help="Display CPU/RAM/disk status and top memory processes")
+    diag.add_argument("--json", action="store_true", help="Print machine-readable JSON for DPN automation")
     sub.add_parser("startup", help="Read-only startup inventory")
     for command in ("preview", "clean"):
         q = sub.add_parser(command, help="Preview or clean selected old files")
@@ -68,6 +70,10 @@ def main(argv: list[str] | None = None, script_path: Path | None = None) -> int:
             return 2
     if args.command == "diagnose":
         snapshot = performance_snapshot()
+        if args.json:
+            print(json.dumps({"snapshot": snapshot, "recommendations": performance_advice(snapshot)},
+                             indent=2))
+            return 0
         d, m = snapshot["disk"], snapshot["ram"]
         print("\nDPN // PERFORMANCE SNAPSHOT")
         print("CPU:", f"{snapshot['cpu']}%" if snapshot["cpu"] is not None else "psutil required")
@@ -86,8 +92,11 @@ def main(argv: list[str] | None = None, script_path: Path | None = None) -> int:
             print("Windows only.")
             return 2
         for item in list_startup_items():
-            print(f"[{item['source']}] {item['name']} -> {item['command']}")
-        print("Read-only. Use Windows Settings > Apps > Startup to disable unwanted entries.")
+            print(f"[{item['source']}] [{item['impact']}] [{item['publisher']}] "
+                  f"{item['name']} -> {item['command']}")
+        print("Read-only. Impact is a cautious app-name heuristic, not measured boot time. "
+              "Publisher signatures are not verified. Use Windows Settings > Apps > Startup "
+              "to disable unwanted entries.")
         return 0
     if args.command in ("preview", "clean"):
         if os.name != "nt":

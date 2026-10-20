@@ -16,6 +16,14 @@ New-Item -ItemType Directory -Path $dest -Force | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $root 'dpn_optimizer') -File -Filter '*.py' | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $dest
 }
+$assets = Join-Path $root 'dpn_optimizer/assets'
+if (Test-Path $assets) {
+    $assetDest = Join-Path $dest 'assets'
+    New-Item -ItemType Directory -Path $assetDest -Force | Out-Null
+    Get-ChildItem -LiteralPath $assets -File | Where-Object { $_.Extension -in '.png', '.ico' } | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $assetDest
+    }
+}
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -LiteralPath $stage -DestinationPath $zip -CompressionLevel Optimal
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
