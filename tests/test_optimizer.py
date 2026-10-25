@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import json
 import io
+from types import SimpleNamespace
 from contextlib import redirect_stdout
 from pathlib import Path
 import tempfile
@@ -13,7 +14,13 @@ from unittest.mock import patch
 
 from dpn_optimizer.cleaner import (Root, _safe_root, clean_root, human_bytes,
                                    run_cleanup, roots_for, file_age)
-from dpn_optimizer.diagnostics import performance_advice, performance_health_score
+from dpn_optimizer import diagnostics
+from dpn_optimizer.diagnostics import (
+    ProcessActionError,
+    performance_advice,
+    performance_health_score,
+    terminate_user_process,
+)
 from dpn_optimizer.cli import make_parser, main
 from dpn_optimizer import scheduler
 from dpn_optimizer.startup import assess_startup_item
@@ -365,6 +372,94 @@ class AuxiliaryTests(unittest.TestCase):
                 self.assertIn('user_temp', action)
                 self.assertNotIn('system_temp', action)
                 self.assertIn('--age-hours 48', action)
+
+
+class ProcessExplorerTests(unittest.TestCase):
+    class FakePsutilError(Exception):
+        pass
+
+    class FakeProcess:
+        def __init__(self, info):
+            self.info = info
+            self.terminated = False
+
+        def cpu_percent(self, interval=None):
+            return self.info.get("cpu_percent", 0)
+
+        def name(self):
+            return self.info["name"]
+
+        def username(self):
+            return self.info["username"]
+
+        def exe(self):
+            return self.info["exe"]
+
+        def create_time(self):
+            return self.info["create_time"]
+
+        def is_running(self):
+            return True
+
+        def terminate(self):
+            self.terminated = True
+
+    def make_psutil(self, process):
+        return SimpleNamespace(
+            Error=self.FakePsutilError,
+            NoSuchProcess=type("NoSuchProcess", (self.FakePsutilError,), {}),
+            AccessDenied=type("AccessDenied", (self.FakePsutilError,), {}),
+            process_iter=lambda _attrs: [process],
+            Process=lambda _pid: process,
+        )
+
+    def make_process(self, pid=12345, name="sample.exe",
+                     username="WORKSTATION\\Alice",
+                     exe=r"C:\Users\Alice\AppData\Local\sample.exe",
+                     create_time=123.0, cpu_percent=8.0):
+        return self.FakeProcess({
+            "pid": pid, "name": name, "username": username, "exe": exe,
+            "create_time": create_time, "cpu_percent": cpu_percent,
+            "memory_info": SimpleNamespace(rss=1024 * 1024),
+            "memory_percent": 1.0, "status": "running",
+        })
+
+    def test_process_snapshot_marks_only_verified_user_app_eligible(self):
+        process = self.make_process()
+        with patch.object(diagnostics, "psutil", self.make_psutil(process)), \
+             patch("dpn_optimizer.diagnostics.getpass.getuser", return_value="Alice"):
+            result = diagnostics.list_process_details()
+        self.assertEqual(result[0]["pid"], 12345)
+        self.assertEqual(result[0]["ram_bytes"], 1024 * 1024)
+        self.assertTrue(result[0]["can_end"])
+
+    def test_termination_requires_matching_process_identity(self):
+        process = self.make_process()
+        with patch.object(diagnostics, "psutil", self.make_psutil(process)), \
+             patch("dpn_optimizer.diagnostics.getpass.getuser", return_value="Alice"), \
+             patch("dpn_optimizer.diagnostics.os.getpid", return_value=99999):
+            terminate_user_process(12345, "sample.exe", 123.0, "Alice")
+        self.assertTrue(process.terminated)
+
+    def test_termination_rejects_windows_components(self):
+        process = self.make_process(
+            name="svchost.exe", exe=r"C:\Windows\System32\svchost.exe"
+        )
+        with patch.object(diagnostics, "psutil", self.make_psutil(process)), \
+             patch("dpn_optimizer.diagnostics.getpass.getuser", return_value="Alice"), \
+             patch("dpn_optimizer.diagnostics.os.getpid", return_value=99999):
+            with self.assertRaises(ProcessActionError):
+                terminate_user_process(12345, "svchost.exe", 123.0, "Alice")
+        self.assertFalse(process.terminated)
+
+    def test_termination_rejects_changed_process(self):
+        process = self.make_process(username="WORKSTATION\\Bob")
+        with patch.object(diagnostics, "psutil", self.make_psutil(process)), \
+             patch("dpn_optimizer.diagnostics.getpass.getuser", return_value="Alice"), \
+             patch("dpn_optimizer.diagnostics.os.getpid", return_value=99999):
+            with self.assertRaises(ProcessActionError):
+                terminate_user_process(12345, "sample.exe", 123.0, "Alice")
+        self.assertFalse(process.terminated)
 
 
 if __name__ == '__main__':

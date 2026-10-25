@@ -14,7 +14,14 @@ from typing import Any, Callable
 
 from . import __version__
 from .cleaner import CATEGORIES, DEFAULT_CATEGORIES, human_bytes, list_reports, reports_path, run_cleanup
-from .diagnostics import performance_advice, performance_health_score, performance_snapshot
+from .diagnostics import (
+    list_process_details,
+    performance_advice,
+    performance_health_score,
+    performance_snapshot,
+    ProcessActionError,
+    terminate_user_process,
+)
 from .diskmap import scan_disk_usage, scan_file_insights
 from .startup import list_startup_items
 from . import scheduler, health
@@ -56,6 +63,9 @@ class DPNWindow:
         self.cancel_flag = threading.Event()
         self.insight_busy = False
         self.insight_cancel = threading.Event()
+        self.process_refresh_busy = False
+        self.process_action_busy = False
+        self.process_rows: dict[str, dict[str, Any]] = {}
         self.page = "Dashboard"
         self.buttons: dict[str, tk.Button] = {}
         self.nav_icons: dict[str, tk.Label] = {}
@@ -177,7 +187,7 @@ class DPNWindow:
         tk.Frame(self.sidebar, bg=LINE, height=1).pack(fill="x", padx=18, pady=(0, 13))
         nav = tk.Frame(self.sidebar, bg=SIDE)
         nav.pack(fill="x", padx=9)
-        tabs = ("Dashboard", "Cleaner", "Disk Map", "File Finder", "Startup",
+        tabs = ("Dashboard", "Processes", "Cleaner", "Disk Map", "File Finder", "Startup",
                 "Automation", "Windows Health", "Reports")
         for index, tab in enumerate(tabs, start=1):
             row = tk.Frame(nav, bg=SIDE, height=38)
@@ -236,6 +246,7 @@ class DPNWindow:
             page.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.pages[tab] = page
         self._dashboard(self.pages["Dashboard"])
+        self._process_explorer(self.pages["Processes"])
         self._cleaner(self.pages["Cleaner"])
         self._disk_map(self.pages["Disk Map"])
         self._file_finder(self.pages["File Finder"])
@@ -451,6 +462,8 @@ class DPNWindow:
             self.nav_marks[key].configure(bg=RED if key == name else SIDE)
         if name == "Startup":
             self._load_startup()
+        elif name == "Processes":
+            self._refresh_processes()
         elif name == "Reports":
             self._load_reports()
         elif name == "Automation":
@@ -516,11 +529,150 @@ class DPNWindow:
         row = tk.Frame(processes, bg=PANEL)
         row.pack(fill="x")
         self._text(row, "TOP MEMORY CONSUMERS", 10, WHITE, True).pack(side="left")
+        self._button(row, "Process Explorer", lambda: self.show("Processes")).pack(
+            side="right", padx=(8, 0)
+        )
         self._button(row, "Refresh", self._poll_performance).pack(side="right")
         self.processes = self._make_tree(processes, ("Process", "PID", "RAM used"),
                                          (320, 90, 140), height=9)
         self._text(page, "Metrics are samples, not proof of sustained performance problems. psutil enables CPU and process monitoring.",
                    9, MUTED).pack(anchor="w", pady=(10, 0))
+
+    def _process_explorer(self, page: tk.Frame) -> None:
+        self._page_title(
+            page, "Process Explorer",
+            "Inspect local CPU and memory use. Ending a process is manual, confirmed, and limited to verified user apps.",
+        )
+        controls = self._panel(page, 13, 10)
+        controls.pack(fill="x")
+        row = tk.Frame(controls, bg=PANEL)
+        row.pack(fill="x")
+        self._text(row, "FILTER", 8, MUTED, True).pack(side="left")
+        self.process_filter = tk.StringVar()
+        search = tk.Entry(
+            row, textvariable=self.process_filter, bg=PANEL2, fg=WHITE,
+            insertbackground=WHITE, bd=0, relief="flat", font=("Segoe UI", 10), width=30
+        )
+        search.pack(side="left", padx=(9, 14), ipady=7)
+        self.process_filter.trace_add("write", lambda *_: self._render_process_rows())
+        self.process_refresh_button = self._button(
+            row, "Refresh Snapshot", self._refresh_processes, primary=True
+        )
+        self.process_refresh_button.pack(side="left")
+        self.end_process_button = self._button(
+            row, "End Selected Process", self._end_selected_process
+        )
+        self.end_process_button.pack(side="left", padx=(8, 0))
+        self.end_process_button.configure(state="disabled")
+        self.process_status = self._text(controls, "Optional psutil required for detailed process data.", 8, MUTED)
+        self.process_status.pack(anchor="w", pady=(8, 0))
+
+        overview = self._panel(page, 12, 10)
+        overview.pack(fill="both", expand=True, pady=(12, 0))
+        self._text(overview, "LIVE PROCESS SNAPSHOT  /  SORTED BY CPU THEN RAM",
+                   8, RED, True).pack(anchor="w")
+        self.process_explorer_table = self._make_tree(
+            overview,
+            ("Process", "PID", "CPU %", "RAM", "RAM %", "User", "State"),
+            (205, 75, 75, 100, 75, 145, 95),
+            height=12,
+        )
+        self.process_explorer_table.bind("<<TreeviewSelect>>", self._select_process)
+        self.process_explorer_table.tag_configure("protected", foreground=MUTED)
+
+        details = self._panel(page, 12, 9)
+        details.pack(fill="x", pady=(12, 0))
+        self._text(details, "SELECTED PROCESS DETAILS", 8, RED, True).pack(anchor="w")
+        self.process_detail = tk.Text(
+            details, height=3, bg=PANEL2, fg=MUTED, bd=0,
+            font=("Consolas", 8), wrap="word", state="disabled"
+        )
+        self.process_detail.pack(fill="x", pady=(8, 0))
+
+    def _refresh_processes(self) -> None:
+        if self.process_refresh_busy or self.process_action_busy:
+            return
+        self.process_refresh_busy = True
+        self.process_refresh_button.configure(state="disabled")
+        self.process_status.configure(text="Collecting a local process snapshot…", fg=RED)
+
+        def worker() -> None:
+            try:
+                self.events.put(("process_snapshot", list_process_details()))
+            except (RuntimeError, OSError) as exc:
+                self.events.put(("process_snapshot_error", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _render_process_rows(self) -> None:
+        if not hasattr(self, "process_explorer_table"):
+            return
+        query = self.process_filter.get().strip().casefold()
+        tree = self.process_explorer_table
+        self.end_process_button.configure(state="disabled")
+        tree.delete(*tree.get_children())
+        for item in self.process_rows.values():
+            searchable = f"{item['name']} {item['pid']} {item['username']} {item['exe']}".casefold()
+            if query and query not in searchable:
+                continue
+            pid = str(item["pid"])
+            tree.insert(
+                "", "end", iid=pid,
+                values=(item["name"], pid, f"{item['cpu_percent']:.1f}",
+                        human_bytes(item["ram_bytes"]), f"{item['memory_percent']:.1f}",
+                        item["username"], item["status"]),
+                tags=() if item["can_end"] else ("protected",),
+            )
+
+    def _select_process(self, _event: Any) -> None:
+        selection = self.process_explorer_table.selection()
+        item = self.process_rows.get(selection[0]) if selection else None
+        self.end_process_button.configure(
+            state="normal" if item and item["can_end"] and not self.process_action_busy else "disabled"
+        )
+        self.process_detail.configure(state="normal")
+        self.process_detail.delete("1.0", "end")
+        if item:
+            eligibility = "Verified current-user app; ending it may lose unsaved work." if item["can_end"] \
+                else "Protected or unverifiable process; the end action is disabled."
+            self.process_detail.insert(
+                "end", f"{item['name']}  |  PID {item['pid']}  |  {item['username']}\n"
+                       f"CPU {item['cpu_percent']:.1f}%  |  RAM {human_bytes(item['ram_bytes'])} "
+                       f"({item['memory_percent']:.1f}%)  |  {item['status']}\n"
+                       f"Image: {item['exe'] or 'Unavailable'}\n{eligibility}"
+            )
+        else:
+            self.process_detail.insert("end", "Select a process to inspect its details.")
+        self.process_detail.configure(state="disabled")
+
+    def _end_selected_process(self) -> None:
+        selection = self.process_explorer_table.selection()
+        item = self.process_rows.get(selection[0]) if selection else None
+        if not item or not item["can_end"] or self.process_action_busy:
+            return
+        if not messagebox.askyesno(
+            "End selected process?",
+            f"End {item['name']} (PID {item['pid']}) now?\n\n"
+            "Windows process termination is immediate. Unsaved work may be lost. "
+            "Only this verified current-user process will be targeted.",
+            icon="warning",
+        ):
+            return
+
+        self.process_action_busy = True
+        self.end_process_button.configure(state="disabled")
+        self.process_status.configure(text=f"Ending {item['name']} (PID {item['pid']})…", fg=RED)
+
+        def worker() -> None:
+            try:
+                terminate_user_process(
+                    item["pid"], item["name"], item["create_time"], item["username"]
+                )
+                self.events.put(("process_ended", item["name"]))
+            except (ProcessActionError, OSError) as exc:
+                self.events.put(("process_action_error", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _file_finder(self, page: tk.Frame) -> None:
         self._page_title(
@@ -1211,6 +1363,31 @@ class DPNWindow:
                 self.insight_scan_button.configure(state="normal")
                 self.insight_stop_button.configure(state="disabled")
                 self.insight_status.configure(text=payload, fg=RED)
+            elif event == "process_snapshot":
+                self.process_refresh_busy = False
+                self.process_refresh_button.configure(state="normal")
+                self.process_rows = {str(item["pid"]): item for item in payload}
+                self._render_process_rows()
+                can_end = sum(bool(item["can_end"]) for item in payload)
+                self.process_status.configure(
+                    text=(f"{len(payload):,} processes · {can_end:,} verified current-user apps "
+                          "eligible for confirmed end action"),
+                    fg=MUTED,
+                )
+            elif event == "process_snapshot_error":
+                self.process_refresh_busy = False
+                self.process_refresh_button.configure(state="normal")
+                self.process_status.configure(text=payload, fg=RED)
+            elif event == "process_ended":
+                self.process_action_busy = False
+                self.process_status.configure(
+                    text=f"End request sent for {payload}. Refreshing the process list…", fg=GREEN
+                )
+                self._refresh_processes()
+            elif event == "process_action_error":
+                self.process_action_busy = False
+                self.process_status.configure(text=payload, fg=RED)
+                self._select_process(None)
             elif event == "health_done":
                 code, output = payload
                 self.health_text.configure(state="normal")

@@ -21,6 +21,7 @@ System Optimizer is a local-first Windows maintenance tool with a red-and-black 
 | --- | --- |
 | DPN desktop interface | Branded black-and-red control center with an animated binary boot console, a live status header, numbered module navigation, and responsive centered window sizing. The startup progress is an intro animation, not a timed hardware diagnostic. |
 | Performance dashboard | Sampled CPU usage with psutil, RAM, disk, top processes by RAM, guidance, two-minute sparklines, and a snapshot headroom score. Updates every 5 seconds while GUI is open. The score averages available CPU, RAM, and disk headroom; it is not a diagnosis or long-term health rating. |
+| Process Explorer | Optional psutil-backed local process snapshot with CPU, RAM, owner, executable path, and status, plus filtering. Ending a process is a separate, explicit confirmation; only processes verified as belonging to the current user and outside protected Windows locations are eligible. Windows termination is immediate, so unsaved work may be lost. |
 | User temp cleaner | Ages files before eligibility (default 48 hours); skips recently changed files, symlinks/junctions, inaccessible/locked files. |
 | Optional cache cleanup | DirectX shader cache; explicitly selected Windows Error Reporting files and user crash dumps; Chrome/Edge *cache files only* if all browsers are closed. |
 | Windows temp | Explicitly selected; may require admin. Never on by default. |
@@ -34,6 +35,7 @@ System Optimizer is a local-first Windows maintenance tool with a red-and-black 
 ### Important safety notes
 
 - Preview-only is the default. **Deletion is permanent after you explicitly approve it.** It does not use the Recycle Bin.
+- The Process Explorer never ends processes automatically. Its explicit end action can immediately close an application and lose unsaved work; protected Windows processes, unverified identities, and processes owned by other users are denied.
 - The only default cleanup category is user temp. Other categories must be opted into.
 - Disk Map and File Finder are read-only. Duplicate matching hashes file contents locally; filenames and file contents are not uploaded or saved in reports. Potentially recoverable duplicate space is an estimate and does not imply that removing any copy is safe.
 - The tool does **not** clean Desktop, Documents, Downloads, pictures, browser cookies/passwords/history, registry settings, Windows Prefetch, or installed programs.
