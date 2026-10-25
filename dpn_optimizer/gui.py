@@ -23,6 +23,7 @@ from .diagnostics import (
     terminate_user_process,
 )
 from .diskmap import scan_disk_usage, scan_file_insights
+from .preferences import AppearancePreferences, load_preferences, save_preferences
 from .startup import list_startup_items
 from . import scheduler, health
 
@@ -55,6 +56,14 @@ class DPNWindow:
         )
         self.root.minsize(min(980, width), min(700, height))
         self.root.configure(bg=BG)
+        self.preference_error: str | None = None
+        try:
+            self.appearance = load_preferences()
+        except (OSError, ValueError, TypeError) as exc:
+            self.appearance = AppearancePreferences()
+            self.preference_error = f"Appearance preferences could not be loaded: {exc}"
+        self._rain_job: str | None = None
+        self.appearance_dialog: tk.Toplevel | None = None
         self._images: list[tk.PhotoImage] = []
         self._set_window_icon()
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -81,9 +90,14 @@ class DPNWindow:
         self.schedule_time = tk.StringVar(value="09:00")
         self._configure_style()
         self._layout()
-        self._show_boot_splash()
-        self.root.after(250, self._consume_events)
-        self.root.after(300, self._poll_performance)
+        if self.appearance.show_intro and not self.appearance.reduced_motion:
+            self._show_boot_splash()
+        if self.preference_error:
+            self.root.after(2800, lambda: messagebox.showwarning(
+                "Appearance preferences", self.preference_error, parent=self.root
+            ))
+        self._event_job = self.root.after(250, self._consume_events)
+        self._poll_job = self.root.after(300, self._poll_performance)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def _configure_style(self) -> None:
@@ -237,6 +251,9 @@ class DPNWindow:
         self.status = tk.Label(status_box, text="●  READY", bg=PANEL, fg=GREEN,
                                font=("Segoe UI Semibold", 9))
         self.status.pack()
+        self._button(header, "Appearance", self._appearance_settings).pack(
+            side="right", padx=(0, 10)
+        )
         tk.Frame(self.main, height=1, bg=LINE).pack(fill="x")
         self._binary_rain(self.main)
         container = tk.Frame(self.main, bg=BG)
@@ -425,17 +442,33 @@ class DPNWindow:
         self.rain_cols: list[list[Any]] = []
         self.rain_fade = ("#2A0605", "#5C0A07", "#A10D08", RED)
         self.rain.bind("<Configure>", self._rain_resize)
-        self.root.after(120, self._rain_tick)
 
     def _rain_resize(self, event: tk.Event) -> None:
-        count = max(1, event.width // 14)
+        spacing = {"Low": 28, "Standard": 14, "High": 10}[self.appearance.intensity]
+        count = max(1, event.width // spacing)
         while len(self.rain_cols) < count:
             self.rain_cols.append([random.randint(-4, 3), random.randint(0, 3)])
         del self.rain_cols[count:]
+        self._restart_rain()
+
+    def _restart_rain(self) -> None:
+        if self._rain_job is not None:
+            self.root.after_cancel(self._rain_job)
+            self._rain_job = None
+        self.rain.delete("all")
+        if self.appearance.binary_rain and not self.appearance.reduced_motion:
+            self._rain_tick()
+        else:
+            self.rain.create_text(
+                18, 28, text="DPN // LOCAL-FIRST SYSTEMS", fill=MUTED,
+                anchor="w", font=("Consolas", 10, "bold")
+            )
 
     def _rain_tick(self) -> None:
+        self._rain_job = None
         if self.root.winfo_exists():
             self.rain.delete("all")
+            spacing = {"Low": 28, "Standard": 14, "High": 10}[self.appearance.intensity]
             for i, col in enumerate(self.rain_cols):
                 col[0] += 1
                 if col[0] > 6:
@@ -443,11 +476,78 @@ class DPNWindow:
                 for t in range(4):
                     row = col[0] - (3 - t)
                     if 0 <= row < 4:
-                        self.rain.create_text(i * 14 + 7, row * 14 + 7, text=random.choice("01"),
+                        self.rain.create_text(i * spacing + 7, row * 14 + 7, text=random.choice("01"),
                                               fill=self.rain_fade[t], font=("Consolas", 10, "bold"))
             self.rain.create_text(self.rain.winfo_width() - 12, 28, text="DPN // 1011 0100",
                                   fill=WHITE, anchor="e", font=("Consolas", 11, "bold"))
-            self._rain_job = self.root.after(140, self._rain_tick)
+            interval = {"Low": 260, "Standard": 140, "High": 90}[self.appearance.intensity]
+            self._rain_job = self.root.after(interval, self._rain_tick)
+
+    def _appearance_settings(self) -> None:
+        if self.appearance_dialog is not None and self.appearance_dialog.winfo_exists():
+            self.appearance_dialog.lift()
+            return
+        dialog = tk.Toplevel(self.root)
+        self.appearance_dialog = dialog
+        dialog.title("DPN // Appearance")
+        dialog.configure(bg=BG, padx=24, pady=22)
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        self._text(dialog, "APPEARANCE & MOTION", 16, WHITE, True).pack(anchor="w")
+        self._text(
+            dialog, "Personalize DPN without changing monitoring or cleanup behavior.",
+            9, MUTED
+        ).pack(anchor="w", pady=(7, 18))
+        rain = tk.BooleanVar(value=self.appearance.binary_rain)
+        reduced = tk.BooleanVar(value=self.appearance.reduced_motion)
+        intro = tk.BooleanVar(value=self.appearance.show_intro)
+        intensity = tk.StringVar(value=self.appearance.intensity)
+        for label, variable in (
+            ("Animate the binary-rain banner", rain),
+            ("Reduced motion (static banner and no boot intro)", reduced),
+            ("Show boot intro on launch", intro),
+        ):
+            tk.Checkbutton(
+                dialog, text=label, variable=variable, bg=BG, fg=WHITE,
+                activebackground=BG, activeforeground=WHITE, selectcolor=PANEL2,
+                font=("Segoe UI", 10), anchor="w"
+            ).pack(anchor="w", pady=5)
+        row = tk.Frame(dialog, bg=BG)
+        row.pack(fill="x", pady=(14, 0))
+        self._text(row, "BINARY INTENSITY", 9, MUTED, True).pack(side="left")
+        ttk.Combobox(
+            row, textvariable=intensity, values=("Low", "Standard", "High"),
+            state="readonly", width=14
+        ).pack(side="right")
+        self._text(
+            dialog, "Low draws fewer digits at a slower rate. Reduced motion overrides\n"
+                    "both animation switches. Changes apply immediately after saving.",
+            9, MUTED
+        ).pack(anchor="w", pady=(14, 0))
+        feedback = self._text(dialog, "", 9, RED, wraplength=450)
+        feedback.pack(anchor="w", fill="x", pady=(10, 0))
+
+        def save() -> None:
+            candidate = AppearancePreferences(
+                binary_rain=rain.get(), reduced_motion=reduced.get(),
+                show_intro=intro.get(), intensity=intensity.get()
+            )
+            try:
+                save_preferences(candidate)
+            except (OSError, ValueError) as exc:
+                feedback.configure(text=f"Not saved: {exc}")
+                return
+            self.appearance = candidate
+            spacing = {"Low": 28, "Standard": 14, "High": 10}[candidate.intensity]
+            count = max(1, self.rain.winfo_width() // spacing)
+            self.rain_cols = [[random.randint(-4, 3), 0] for _ in range(count)]
+            self._restart_rain()
+            dialog.destroy()
+
+        actions = tk.Frame(dialog, bg=BG)
+        actions.pack(fill="x", pady=(6, 0))
+        self._button(actions, "Save Appearance", save, primary=True).pack(side="right")
+        self._button(actions, "Cancel", dialog.destroy).pack(side="right", padx=8)
 
     def show(self, name: str) -> None:
         self.page = name
@@ -1397,7 +1497,7 @@ class DPNWindow:
                 self.busy = False
                 self.status.configure(text="●  READY", fg=GREEN)
         if self.root.winfo_exists():
-            self.root.after(250, self._consume_events)
+            self._event_job = self.root.after(250, self._consume_events)
 
     def close(self) -> None:
         if self.busy:
@@ -1407,6 +1507,13 @@ class DPNWindow:
             self.cancel_flag.set()
         self.disk_cancel.set()
         self.insight_cancel.set()
+        if self._rain_job is not None:
+            self.root.after_cancel(self._rain_job)
+            self._rain_job = None
+        if self._poll_job is not None:
+            self.root.after_cancel(self._poll_job)
+            self._poll_job = None
+        self.root.after_cancel(self._event_job)
         self.root.destroy()
 
     def run(self) -> None:
