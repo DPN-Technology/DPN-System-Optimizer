@@ -7,6 +7,7 @@ from pathlib import Path
 import queue
 import random
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any, Callable
@@ -18,15 +19,17 @@ from .diskmap import scan_disk_usage
 from .startup import list_startup_items
 from . import scheduler, health
 
-BG = "#050505"
-SIDE = "#0A0A0A"
-PANEL = "#111111"
-PANEL2 = "#1A1A1A"
-LINE = "#3A1216"
-RED = "#E10600"
-WHITE = "#F3F6FA"
-MUTED = "#93A1B3"
-GREEN = "#47CCA5"
+BG = "#07080B"
+SIDE = "#0A0B10"
+PANEL = "#101218"
+PANEL2 = "#171A22"
+LINE = "#292D37"
+RED = "#E50918"
+WHITE = "#F5F6F8"
+MUTED = "#9299A6"
+GREEN = "#43D6A1"
+HOVER = "#20242E"
+RED_HOVER = "#FF3041"
 ASSETS = Path(__file__).resolve().parent / "assets"
 
 
@@ -35,8 +38,15 @@ class DPNWindow:
         self.script_path = script_path
         self.root = tk.Tk()
         self.root.title(f"DPN SYSTEM OPTIMIZER // v{__version__}")
-        self.root.geometry("1120x760")
-        self.root.minsize(930, 660)
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        width = min(1280, max(960, screen_width - 80))
+        height = min(820, max(700, screen_height - 140))
+        self.root.geometry(
+            f"{width}x{height}+{max(0, (screen_width - width) // 2)}"
+            f"+{max(0, (screen_height - 140 - height) // 2)}"
+        )
+        self.root.minsize(min(980, width), min(700, height))
         self.root.configure(bg=BG)
         self._images: list[tk.PhotoImage] = []
         self._set_window_icon()
@@ -46,6 +56,8 @@ class DPNWindow:
         self.cancel_flag = threading.Event()
         self.page = "Dashboard"
         self.buttons: dict[str, tk.Button] = {}
+        self.nav_icons: dict[str, tk.Label] = {}
+        self.nav_marks: dict[str, tk.Frame] = {}
         self.pages: dict[str, tk.Frame] = {}
         self.metrics: dict[str, tk.Label] = {}
         self.metric_history: dict[str, list[float]] = {
@@ -67,12 +79,15 @@ class DPNWindow:
         sty.theme_use("clam")
         sty.configure("DPN.Treeview", background=PANEL, foreground=WHITE,
                       fieldbackground=PANEL, borderwidth=0, rowheight=29,
-                      font=("Segoe UI", 9))
+                      relief="flat", font=("Segoe UI", 9))
         sty.configure("DPN.Treeview.Heading", background=PANEL2, foreground=WHITE,
-                      relief="flat", borderwidth=0, font=("Segoe UI Semibold", 9))
+                      relief="flat", borderwidth=0, font=("Segoe UI Semibold", 8))
         sty.map("DPN.Treeview", background=[("selected", "#77303A")],
                 foreground=[("selected", WHITE)])
         sty.map("DPN.Treeview.Heading", background=[("active", "#2A3543")])
+        sty.layout("DPN.Treeview", [
+            ("Treeview.treearea", {"sticky": "nswe"})
+        ])
         sty.configure("DPN.Horizontal.TProgressbar", background=RED, troughcolor=PANEL2,
                       bordercolor=PANEL, lightcolor=RED, darkcolor=RED)
         sty.configure("TCombobox", fieldbackground=PANEL2, background=PANEL2, foreground=WHITE,
@@ -104,61 +119,108 @@ class DPNWindow:
 
     def _button(self, parent: tk.Widget, title: str, action: Callable,
                 primary: bool = False, **kwargs: Any) -> tk.Button:
-        return tk.Button(parent, text=title, command=action,
-                         bg=RED if primary else PANEL2, fg=WHITE,
-                         activebackground="#F34C57" if primary else "#344254",
-                         activeforeground=WHITE, relief="flat", bd=0, highlightthickness=0,
-                         font=("Segoe UI Semibold", 10), cursor="hand2",
-                         padx=15, pady=11, **kwargs)
+        normal_bg = RED if primary else PANEL2
+        hover_bg = RED_HOVER if primary else HOVER
+        button = tk.Button(parent, text=title, command=action,
+                           bg=normal_bg, fg=WHITE,
+                           activebackground=hover_bg, activeforeground=WHITE,
+                           relief="flat", bd=0, highlightthickness=0,
+                           font=("Segoe UI Semibold", 10), cursor="hand2",
+                           padx=15, pady=11, **kwargs)
+
+        def on_enter(event: tk.Event) -> None:
+            if button.cget("state") == "normal":
+                event.widget.configure(bg=hover_bg)
+
+        def on_leave(event: tk.Event) -> None:
+            if button.cget("state") == "normal":
+                event.widget.configure(bg=normal_bg)
+
+        button.bind("<Enter>", on_enter)
+        button.bind("<Leave>", on_leave)
+        return button
 
     def _panel(self, parent: tk.Widget, padx: int = 17, pady: int = 15) -> tk.Frame:
         f = tk.Frame(parent, bg=PANEL, padx=padx, pady=pady, highlightthickness=1,
                      highlightbackground=LINE)
+        tk.Frame(f, bg=RED, height=2).pack(fill="x", pady=(0, 11))
         return f
 
     def _page_title(self, parent: tk.Widget, heading: str, desc: str) -> None:
-        self._text(parent, heading, 19, WHITE, True).pack(anchor="w", pady=(0, 4))
-        self._text(parent, desc, 10, MUTED).pack(anchor="w", pady=(0, 18))
+        self._text(parent, "DPN  /  MODULE", 8, RED, True).pack(anchor="w", pady=(0, 5))
+        self._text(parent, heading, 22, WHITE, True).pack(anchor="w", pady=(0, 4))
+        self._text(parent, desc, 9, MUTED).pack(anchor="w", pady=(0, 16))
 
     def _layout(self) -> None:
-        self.sidebar = tk.Frame(self.root, bg=SIDE, width=225)
+        self.sidebar = tk.Frame(self.root, bg=SIDE, width=238)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
         tk.Frame(self.sidebar, bg=RED, height=5).pack(fill="x")
-        title = tk.Frame(self.sidebar, bg=SIDE, padx=19, pady=14)
+        title = tk.Frame(self.sidebar, bg=SIDE, padx=19, pady=16)
         title.pack(fill="x")
         logo = self._load_logo("dpn_logo_sidebar.png")
         if logo is not None:
             tk.Label(title, image=logo, bg=SIDE, bd=0).pack(anchor="center")
         else:
-            self._text(title, "DPN // TECHNOLOGY", 10, RED, True).pack(anchor="w")
-        self._text(title, "SYSTEM OPTIMIZER", 13, WHITE, True).pack(anchor="center", pady=(8, 0))
-        self._text(title, "v2.0 · LOCAL-FIRST", 9, MUTED).pack(anchor="center", pady=(2, 0))
-        tk.Frame(self.sidebar, bg=LINE, height=1).pack(fill="x", padx=18, pady=(0, 10))
-        for tab in ("Dashboard", "Cleaner", "Disk Map", "Startup", "Automation", "Windows Health", "Reports"):
-            btn = tk.Button(self.sidebar, text="  ▸  " + tab, anchor="w", fg=WHITE,
-                            bg=SIDE, relief="flat", bd=0, highlightthickness=0, activebackground=PANEL2,
-                            activeforeground=WHITE, padx=15, pady=8,
-                            cursor="hand2", font=("Segoe UI", 11),
+            self._text(title, "DPN // TECHNOLOGY", 10, RED, True).pack(anchor="center")
+        self._text(title, "SYSTEM OPTIMIZER", 12, WHITE, True).pack(anchor="center", pady=(7, 0))
+        self._text(title, "CONTROL CENTER  /  v2.0", 8, MUTED, True).pack(anchor="center", pady=(3, 0))
+        tk.Frame(self.sidebar, bg=LINE, height=1).pack(fill="x", padx=18, pady=(0, 13))
+        nav = tk.Frame(self.sidebar, bg=SIDE)
+        nav.pack(fill="x", padx=9)
+        tabs = ("Dashboard", "Cleaner", "Disk Map", "Startup", "Automation", "Windows Health", "Reports")
+        for index, tab in enumerate(tabs, start=1):
+            row = tk.Frame(nav, bg=SIDE, height=42)
+            row.pack(fill="x", pady=2)
+            row.pack_propagate(False)
+            mark = tk.Frame(row, bg=SIDE, width=3)
+            mark.pack(side="left", fill="y")
+            icon = tk.Label(row, text=f"{index:02}", width=3, bg=SIDE, fg=MUTED,
+                            font=("Consolas", 9, "bold"))
+            icon.pack(side="left", padx=(8, 5))
+            btn = tk.Button(row, text=tab, anchor="w", fg=WHITE,
+                            bg=SIDE, relief="flat", bd=0, highlightthickness=0,
+                            activebackground=HOVER, activeforeground=WHITE, padx=5,
+                            cursor="hand2", font=("Segoe UI Semibold", 10),
                             command=lambda tab=tab: self.show(tab))
-            btn.pack(fill="x", padx=9, pady=1)
+            btn.pack(side="left", fill="both", expand=True, padx=(0, 7))
+            icon.bind("<Button-1>", lambda event, tab=tab: self._nav_icon_click(event, tab))
+            icon.configure(cursor="hand2")
+            btn.bind("<Enter>", lambda event, row=row, tab=tab: self._nav_hover(event, row, tab, True))
+            btn.bind("<Leave>", lambda event, row=row, tab=tab: self._nav_hover(event, row, tab, False))
+            icon.bind("<Enter>", lambda event, row=row, tab=tab: self._nav_hover(event, row, tab, True))
+            icon.bind("<Leave>", lambda event, row=row, tab=tab: self._nav_hover(event, row, tab, False))
             self.buttons[tab] = btn
-        tk.Frame(self.sidebar, bg=LINE, height=1).pack(fill="x", padx=18, pady=(14, 8))
-        self._text(self.sidebar, "SAFE BY DESIGN", 9, GREEN, True).pack(anchor="w", padx=20)
-        self._text(self.sidebar, "Preview-first · No telemetry\nNo registry cleanup", 9, MUTED).pack(
-            anchor="w", padx=20, pady=(6, 0))
+            self.nav_icons[tab] = icon
+            self.nav_marks[tab] = mark
+        safety = tk.Frame(self.sidebar, bg=PANEL, padx=13, pady=12,
+                          highlightthickness=1, highlightbackground=LINE)
+        safety.pack(side="bottom", fill="x", padx=12, pady=13)
+        row = tk.Frame(safety, bg=PANEL)
+        row.pack(fill="x")
+        tk.Label(row, text="●", bg=PANEL, fg=GREEN, font=("Segoe UI", 10)).pack(side="left")
+        self._text(row, "LOCAL MODE ACTIVE", 8, GREEN, True).pack(side="left", padx=(7, 0))
+        self._text(safety, "Preview first  ·  No telemetry\nNo registry cleanup", 8, MUTED).pack(
+            anchor="w", pady=(7, 0))
         self.main = tk.Frame(self.root, bg=BG)
         self.main.pack(side="left", fill="both", expand=True)
-        header = tk.Frame(self.main, bg=BG, padx=27, pady=17)
+        header = tk.Frame(self.main, bg=BG, padx=30, pady=13)
         header.pack(fill="x")
-        self._text(header, "COMMAND CENTER     /     WINDOWS PERFORMANCE", 10, MUTED, True).pack(side="left")
-        self.status = tk.Label(header, text="●  READY", bg=BG, fg=GREEN,
+        heading = tk.Frame(header, bg=BG)
+        heading.pack(side="left", fill="y")
+        self._text(heading, "DPN TECHNOLOGY  /  SYSTEMS", 8, RED, True).pack(anchor="w")
+        self.header_route = self._text(heading, "CONTROL ROOM  /  DASHBOARD", 10, WHITE, True)
+        self.header_route.pack(anchor="w", pady=(4, 0))
+        status_box = tk.Frame(header, bg=PANEL, padx=11, pady=7,
+                              highlightthickness=1, highlightbackground=LINE)
+        status_box.pack(side="right")
+        self.status = tk.Label(status_box, text="●  READY", bg=PANEL, fg=GREEN,
                                font=("Segoe UI Semibold", 9))
-        self.status.pack(side="right")
+        self.status.pack()
         tk.Frame(self.main, height=1, bg=LINE).pack(fill="x")
         self._binary_rain(self.main)
         container = tk.Frame(self.main, bg=BG)
-        container.pack(fill="both", expand=True, padx=27, pady=23)
+        container.pack(fill="both", expand=True, padx=30, pady=20)
         for tab in self.buttons:
             page = tk.Frame(container, bg=BG)
             page.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -173,66 +235,154 @@ class DPNWindow:
         self.show("Dashboard")
 
     def _show_boot_splash(self) -> None:
-        self.boot_splash = tk.Frame(
-            self.root, bg=BG, highlightthickness=1, highlightbackground=LINE
-        )
+        self.boot_splash = tk.Frame(self.root, bg=BG)
         self.boot_splash.place(x=0, y=0, relwidth=1, relheight=1)
         self.boot_splash.lift()
 
-        splash_logo = self._load_logo("dpn_logo_splash.png")
+        self.boot_backdrop = tk.Canvas(self.boot_splash, bg=BG, highlightthickness=0)
+        self.boot_backdrop.pack(fill="both", expand=True)
+        self.boot_backdrop.bind("<Configure>", self._draw_boot_backdrop)
+
+        self.boot_card = tk.Frame(
+            self.boot_splash, bg=PANEL, padx=30, pady=24,
+            highlightthickness=1, highlightbackground=LINE
+        )
+        self.boot_card.place(relx=0.5, rely=0.5, width=870, height=486, anchor="center")
+
+        top = tk.Frame(self.boot_card, bg=PANEL)
+        top.pack(fill="x")
+        self._text(top, "DPN  /  SYSTEM INITIALIZATION", 9, RED, True).pack(side="left")
+        self._text(top, "LOCAL SESSION    •    NO TELEMETRY", 8, MUTED, True).pack(side="right")
+        tk.Frame(self.boot_card, bg=LINE, height=1).pack(fill="x", pady=(15, 20))
+
+        main = tk.Frame(self.boot_card, bg=PANEL)
+        main.pack(fill="both", expand=True)
+        logo_frame = tk.Frame(main, bg="#0B0D12", width=238, height=265,
+                              highlightthickness=1, highlightbackground=LINE)
+        logo_frame.pack(side="left", fill="y", padx=(0, 27))
+        logo_frame.pack_propagate(False)
+        splash_logo = self._load_logo("dpn_logo_boot.png")
         if splash_logo is not None:
-            tk.Label(self.boot_splash, image=splash_logo, bg=BG, bd=0).place(
-                relx=0.5, rely=0.28, anchor="center")
+            tk.Label(logo_frame, image=splash_logo, bg="#0B0D12", bd=0).pack(expand=True)
         else:
-            self._text(self.boot_splash, "DPN // TECHNOLOGY", 10, RED, True).place(
-                relx=0.5, rely=0.28, anchor="center")
-        self.boot_title = self._text(self.boot_splash, "", 24, WHITE, True)
-        self.boot_title.configure(anchor="center", justify="center")
-        self.boot_title.place(relx=0.5, rely=0.56, anchor="center")
-        self.boot_binary = self._text(self.boot_splash, "", 11, RED, True)
-        self.boot_binary.configure(
-            anchor="center", justify="center", font=("Consolas", 11, "bold")
-        )
-        self.boot_binary.place(relx=0.5, rely=0.63, anchor="center")
+            self._text(logo_frame, "DPN // TECHNOLOGY", 10, RED, True).pack(expand=True)
+        self._text(logo_frame, "BINARY SYSTEMS  /  LOCAL", 8, MUTED, True).pack(pady=(0, 14))
 
+        info = tk.Frame(main, bg=PANEL)
+        info.pack(side="left", fill="both", expand=True)
+        self._text(info, "WINDOWS PERFORMANCE SUITE", 8, MUTED, True).pack(anchor="w")
+        self.boot_title = self._text(info, "SYSTEM OPTIMIZER", 26, WHITE, True)
+        self.boot_title.pack(anchor="w", pady=(6, 0))
+        self.boot_binary = self._text(info, "", 9, RED, True)
+        self.boot_binary.configure(font=("Consolas", 9, "bold"))
+        self.boot_binary.pack(anchor="w", pady=(7, 0))
+        self._text(info, "Local-first diagnostics. Conservative maintenance.", 9, MUTED).pack(
+            anchor="w", pady=(5, 13))
+
+        self.boot_steps: list[tuple[tk.Label, tk.Label]] = []
+        for index, (name, detail) in enumerate((
+            ("DPN INTERFACE", "NAVIGATION  /  LOCAL WORKSPACE"),
+            ("LIVE DIAGNOSTICS", "CPU  /  MEMORY  /  STORAGE"),
+            ("SAFETY CONTROLS", "PREVIEW FIRST  /  EXPLICIT ACTIONS"),
+        ), start=1):
+            step = tk.Frame(info, bg=PANEL2, padx=10, pady=8)
+            step.pack(fill="x", pady=3)
+            mark = tk.Label(step, text=f"{index:02}", bg=PANEL2, fg=RED,
+                            font=("Consolas", 9, "bold"), width=3)
+            mark.pack(side="left")
+            labels = tk.Frame(step, bg=PANEL2)
+            labels.pack(side="left", padx=(6, 0))
+            self._text(labels, name, 8, WHITE, True).pack(anchor="w")
+            self._text(labels, detail, 7, MUTED, True).pack(anchor="w", pady=(2, 0))
+            state = self._text(step, "READY", 7, MUTED, True)
+            state.pack(side="right")
+            self.boot_steps.append((mark, state))
+
+        footer = tk.Frame(self.boot_card, bg=PANEL)
+        footer.pack(fill="x", pady=(19, 0))
+        self.boot_status = self._text(footer, "PREPARING LOCAL COMMAND CENTER", 8, MUTED, True)
+        self.boot_status.pack(side="left")
+        self.boot_percent = self._text(footer, "00%", 9, RED, True)
+        self.boot_percent.pack(side="right")
         self.boot_progress = tk.Canvas(
-            self.boot_splash, width=270, height=3, bg=PANEL2, highlightthickness=0
+            self.boot_card, height=5, bg=PANEL2, highlightthickness=0
         )
-        self.boot_progress.place(relx=0.5, rely=0.69, anchor="center")
-        self.boot_bar = self.boot_progress.create_rectangle(0, 0, 0, 3, fill=RED, width=0)
-        self.boot_status = self._text(
-            self.boot_splash, "INITIALIZING LOCAL DIAGNOSTICS", 9, MUTED, True
-        )
-        self.boot_status.configure(anchor="center", justify="center")
-        self.boot_status.place(relx=0.5, rely=0.74, anchor="center")
-        self._boot_splash_dismissing = False
-        self._boot_splash_tick(0)
-        self.root.after(1650, self._dismiss_boot_splash)
+        self.boot_progress.pack(fill="x", pady=(9, 0))
+        self.boot_bar = self.boot_progress.create_rectangle(0, 0, 0, 5, fill=RED, width=0)
+        self._text(self.boot_card, "DPN TECHNOLOGY   /   WINDOWS DESKTOP   /   LOCAL-FIRST",
+                   7, MUTED, True).pack(anchor="center", pady=(15, 0))
 
-    def _boot_splash_tick(self, frame: int) -> None:
+        self._boot_splash_dismissing = False
+        self._boot_started = time.monotonic()
+        self._boot_splash_tick()
+        self.root.after(2500, self._dismiss_boot_splash)
+
+    def _draw_boot_backdrop(self, event: tk.Event) -> None:
+        canvas = self.boot_backdrop
+        canvas.delete("all")
+        width, height = max(event.width, 1), max(event.height, 1)
+        center_x, center_y = width / 2, height / 2
+        for scale, color in ((1.0, "#13151B"), (0.82, "#101217"), (0.64, "#0D0F14")):
+            radius_x, radius_y = width * 0.46 * scale, height * 0.58 * scale
+            canvas.create_oval(center_x - radius_x, center_y - radius_y,
+                               center_x + radius_x, center_y + radius_y,
+                               outline=color, width=1)
+        canvas.create_text(28, 25, anchor="w", fill="#414652",
+                           font=("Consolas", 8, "bold"), text="DPN // BOOT CONSOLE")
+        canvas.create_text(width - 28, height - 23, anchor="e", fill="#414652",
+                           font=("Consolas", 8, "bold"), text="LOCAL SYSTEM  /  01")
+        self.boot_scanline = canvas.create_line(
+            0, 0, width, 0, fill="#29141A", width=1
+        )
+        columns = max(1, int(width // 52))
+        for column in range(columns):
+            x = 18 + column * 52
+            for row in range(max(1, int(height // 37))):
+                if random.random() < 0.34:
+                    y = 53 + row * 37
+                    canvas.create_text(
+                        x, y, text=random.choice("01"),
+                        fill=random.choice(("#252832", "#29191F", "#36141C")),
+                        font=("Consolas", 8)
+                    )
+
+    def _boot_splash_tick(self) -> None:
         if (self._boot_splash_dismissing or not self.root.winfo_exists()
                 or not self.boot_splash.winfo_exists()):
             return
-
-        title = "SYSTEM OPTIMIZER"
-        resolved = min(len(title), max(0, frame - 8))
+        duration = 2.5
+        progress = min((time.monotonic() - self._boot_started) / duration, 1.0)
+        resolved = min(len("SYSTEM OPTIMIZER"), int(progress * 19))
         scramble = "".join(
             char if index < resolved or char == " " else random.choice("01ABCDEF")
-            for index, char in enumerate(title)
+            for index, char in enumerate("SYSTEM OPTIMIZER")
         )
         self.boot_title.configure(text=scramble)
         self.boot_binary.configure(
-            text="  ".join("".join(random.choice("01") for _ in range(4)) for _ in range(8))
+            text="  ".join("".join(random.choice("01") for _ in range(4)) for _ in range(6))
         )
-        self.boot_progress.coords(self.boot_bar, 0, 0, 270 * min(frame / 24, 1), 3)
-        if frame >= 8:
-            self.boot_status.configure(text="LOADING SYSTEM MODULES")
-        if frame >= 17:
-            self.boot_status.configure(text="READY // LOCAL-FIRST")
-        if frame >= 29:
-            self._dismiss_boot_splash()
-            return
-        self.root.after(55, self._boot_splash_tick, frame + 1)
+        width = self.boot_progress.winfo_width()
+        self.boot_progress.coords(self.boot_bar, 0, 0, width * progress, 5)
+        self.boot_percent.configure(text=f"{int(progress * 100):02}%")
+        backdrop_height = max(self.boot_backdrop.winfo_height(), 1)
+        scan_y = (time.monotonic() - self._boot_started) * 95 % backdrop_height
+        if hasattr(self, "boot_scanline"):
+            self.boot_backdrop.coords(
+                self.boot_scanline, 0, scan_y, self.boot_backdrop.winfo_width(), scan_y
+            )
+        active_steps = min(
+            int(progress * len(self.boot_steps)) + (1 if progress > 0 else 0),
+            len(self.boot_steps),
+        )
+        for index, (mark, state) in enumerate(self.boot_steps):
+            if index < active_steps:
+                mark.configure(fg=RED)
+                state.configure(text="ONLINE", fg=GREEN)
+            else:
+                mark.configure(fg=MUTED)
+                state.configure(text="STANDBY", fg=MUTED)
+        if progress < 1:
+            self.root.after(70, self._boot_splash_tick)
 
     def _dismiss_boot_splash(self) -> None:
         if not self.boot_splash.winfo_exists():
@@ -240,6 +390,11 @@ class DPNWindow:
         self._boot_splash_dismissing = True
         self.boot_title.configure(text="SYSTEM OPTIMIZER")
         self.boot_status.configure(text="READY // LOCAL-FIRST")
+        self.boot_percent.configure(text="100%")
+        self.boot_progress.coords(self.boot_bar, 0, 0, self.boot_progress.winfo_width(), 5)
+        for mark, state in self.boot_steps:
+            mark.configure(fg=RED)
+            state.configure(text="ONLINE", fg=GREEN)
         self.root.after(150, self.boot_splash.destroy)
 
     def _binary_rain(self, parent: tk.Widget) -> None:
@@ -274,16 +429,31 @@ class DPNWindow:
 
     def show(self, name: str) -> None:
         self.page = name
+        self.header_route.configure(text=f"CONTROL ROOM  /  {name.upper()}")
         self.pages[name].lift()
         for key, b in self.buttons.items():
             b.configure(bg=PANEL2 if key == name else SIDE,
-                        fg=RED if key == name else WHITE)
+                        fg=WHITE if key == name else MUTED)
+            self.nav_icons[key].configure(
+                bg=PANEL2 if key == name else SIDE,
+                fg=RED if key == name else MUTED)
+            self.nav_marks[key].configure(bg=RED if key == name else SIDE)
         if name == "Startup":
             self._load_startup()
         elif name == "Reports":
             self._load_reports()
         elif name == "Automation":
             self._load_scheduler()
+
+    def _nav_icon_click(self, event: tk.Event, tab: str) -> None:
+        event.widget.focus_set()
+        self.show(tab)
+
+    def _nav_hover(self, event: tk.Event, row: tk.Frame, tab: str, entering: bool) -> None:
+        if self.page != tab:
+            color = HOVER if entering else SIDE
+            row.configure(bg=color)
+            event.widget.configure(bg=color)
 
     def _make_tree(self, parent: tk.Widget, columns: tuple[str, ...], widths: tuple[int, ...],
                    height: int = 10) -> ttk.Treeview:
@@ -461,7 +631,7 @@ class DPNWindow:
         self._text(left, "LARGEST FOLDERS", 10, RED, True).pack(anchor="w")
         self.disk_bars = tk.Canvas(left, bg=PANEL, highlightthickness=0)
         self.disk_bars.pack(fill="both", expand=True, pady=(10, 0))
-        self.disk_bars.bind("<Configure>", lambda _e: self._draw_disk_bars())
+        self.disk_bars.bind("<Configure>", self._draw_disk_bars)
         self.disk_folders: list[dict[str, Any]] = []
         right = self._panel(body, 12, 10)
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -513,10 +683,10 @@ class DPNWindow:
                   f"{result['errors']} unreadable{note}"), fg=MUTED)
         self._finish_disk_scan()
 
-    def _draw_disk_bars(self) -> None:
+    def _draw_disk_bars(self, event: tk.Event | None = None) -> None:
         canvas = self.disk_bars
         canvas.delete("all")
-        width = max(canvas.winfo_width(), 200)
+        width = max(event.width if event is not None else canvas.winfo_width(), 200)
         if not self.disk_folders:
             canvas.create_text(10, 12, anchor="w", fill=MUTED, font=("Segoe UI", 9),
                                text="Run a scan to map folder sizes.")

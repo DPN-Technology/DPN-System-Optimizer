@@ -19,6 +19,7 @@ System Optimizer is a local-first Windows maintenance tool with a red-and-black 
 
 | Module | Implemented behavior |
 | --- | --- |
+| DPN desktop interface | Branded black-and-red control center with an animated binary boot console, a live status header, numbered module navigation, and responsive centered window sizing. The startup progress is an intro animation, not a timed hardware diagnostic. |
 | Performance dashboard | Sampled CPU usage with psutil, RAM, disk, top processes by RAM, guidance, two-minute sparklines, and a snapshot headroom score. Updates every 5 seconds while GUI is open. The score averages available CPU, RAM, and disk headroom; it is not a diagnosis or long-term health rating. |
 | User temp cleaner | Ages files before eligibility (default 48 hours); skips recently changed files, symlinks/junctions, inaccessible/locked files. |
 | Optional cache cleanup | DirectX shader cache; explicitly selected Windows Error Reporting files and user crash dumps; Chrome/Edge *cache files only* if all browsers are closed. |
