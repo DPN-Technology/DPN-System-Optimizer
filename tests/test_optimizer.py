@@ -17,7 +17,7 @@ from dpn_optimizer.diagnostics import performance_advice, performance_health_sco
 from dpn_optimizer.cli import make_parser, main
 from dpn_optimizer import scheduler
 from dpn_optimizer.startup import assess_startup_item
-from dpn_optimizer.diskmap import scan_disk_usage
+from dpn_optimizer.diskmap import scan_disk_usage, scan_file_insights
 
 
 class DiskMapTests(unittest.TestCase):
@@ -60,6 +60,77 @@ class DiskMapTests(unittest.TestCase):
         except OSError:
             self.skipTest('Cannot create symlinks')
         self.assertEqual(scan_disk_usage(self.root)['total_bytes'], 450)
+
+
+class FileInsightTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / 'first.bin').write_bytes(b'A' * 64)
+        (self.root / 'second.bin').write_bytes(b'A' * 64)
+        (self.root / 'different.bin').write_bytes(b'B' * 64)
+        (self.root / 'small.bin').write_bytes(b'A' * 8)
+
+    def test_finds_exact_duplicates_and_reclaimable_size(self):
+        result = scan_file_insights(self.root, min_size=32)
+        self.assertEqual(result['duplicate_groups'], 1)
+        self.assertEqual(result['duplicates'][0]['bytes_each'], 64)
+        self.assertEqual(result['duplicates'][0]['reclaimable_bytes'], 64)
+        self.assertEqual(len(result['duplicates'][0]['paths']), 2)
+        self.assertEqual(result['reclaimable_bytes'], 64)
+
+    def test_same_size_different_content_is_not_duplicate(self):
+        result = scan_file_insights(self.root, min_size=32)
+        self.assertEqual(result['duplicate_groups'], 1)
+        self.assertNotIn('different.bin', result['duplicates'][0]['paths'])
+
+    def test_minimum_size_filters_duplicate_candidates(self):
+        result = scan_file_insights(self.root, min_size=65)
+        self.assertEqual(result['duplicate_groups'], 0)
+        self.assertEqual(result['files_seen'], 4)
+
+    def test_scan_never_modifies_files(self):
+        original = (self.root / 'first.bin').read_bytes()
+        scan_file_insights(self.root, min_size=1)
+        self.assertEqual((self.root / 'first.bin').read_bytes(), original)
+
+    def test_cancelled_scan_is_marked_partial(self):
+        result = scan_file_insights(self.root, min_size=1, cancelled=lambda: True)
+        self.assertTrue(result['truncated'])
+        self.assertEqual(result['files_seen'], 0)
+
+    def test_candidate_limit_marks_partial(self):
+        result = scan_file_insights(self.root, min_size=1, max_candidates=1)
+        self.assertTrue(result['truncated'])
+
+    def test_symlinked_files_are_skipped(self):
+        outside = self.root.parent / (self.root.name + '-outside.bin')
+        outside.write_bytes(b'A' * 64)
+        self.addCleanup(lambda: outside.unlink(missing_ok=True))
+        link = self.root / 'linked.bin'
+        try:
+            link.symlink_to(outside)
+        except OSError:
+            self.skipTest('Cannot create symlinks')
+        result = scan_file_insights(self.root, min_size=1)
+        self.assertFalse(any(item['path'] == str(link) for item in result['largest_files']))
+        self.assertEqual(result['files_seen'], 4)
+
+    def test_invalid_minimum_size_rejected(self):
+        with self.assertRaises(ValueError):
+            scan_file_insights(self.root, min_size=-1)
+
+    def test_hardlinks_do_not_overstate_reclaimable_bytes(self):
+        hardlink = self.root / 'hardlink.bin'
+        try:
+            os.link(self.root / 'first.bin', hardlink)
+        except OSError:
+            self.skipTest('Cannot create hardlinks')
+        result = scan_file_insights(self.root, min_size=32)
+        group = result['duplicates'][0]
+        self.assertEqual(len(group['paths']), 3)
+        self.assertEqual(group['reclaimable_bytes'], 64)
 
 
 class CleanerSafetyTests(unittest.TestCase):

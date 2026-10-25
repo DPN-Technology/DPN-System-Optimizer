@@ -25,6 +25,7 @@ System Optimizer is a local-first Windows maintenance tool with a red-and-black 
 | Optional cache cleanup | DirectX shader cache; explicitly selected Windows Error Reporting files and user crash dumps; Chrome/Edge *cache files only* if all browsers are closed. |
 | Windows temp | Explicitly selected; may require admin. Never on by default. |
 | Disk Space Map | Read-only scan of your user profile, Downloads, Documents, or system drive that ranks the largest folders with bar charts and lists the 25 largest files, with an *Open Folder* button. Symlinks/junctions are never followed, the scan can be stopped, and system-drive scans stop after 45 seconds (results are then marked partial). It never deletes or changes anything. |
+| Duplicate & Large File Finder | Read-only SHA-256 duplicate matching and largest-file ranking across the selected profile, Documents, Downloads, or system drive. Same-size candidates only are hashed; the minimum size defaults to 1 MB. Scan is cancellable and bounded to 90 seconds or 50,000 candidates. Reparse points are skipped, changed/unreadable files are not trusted, and hard links are not counted as recoverable space. Potential savings are estimates; no files are deleted or modified. |
 | Startup analyzer | Read-only inventory of Run/RunOnce values and Startup-folder files, including machine-wide keys when accessible. Recognizable sync, chat, and launcher apps are flagged as potentially high impact using a cautious name-based heuristic; it does not measure boot time or verify publisher signatures, so publisher status is shown as unknown. |
 | Windows health | Manually triggered `sfc /verifyonly` or `DISM /Online /Cleanup-Image /ScanHealth`, no automatic repair. |
 | Scheduler | Opt-in task using Windows Task Scheduler. Daily **user temp only**, 48+ hours old, limited privileges; you specify its local time. |
@@ -34,6 +35,7 @@ System Optimizer is a local-first Windows maintenance tool with a red-and-black 
 
 - Preview-only is the default. **Deletion is permanent after you explicitly approve it.** It does not use the Recycle Bin.
 - The only default cleanup category is user temp. Other categories must be opted into.
+- Disk Map and File Finder are read-only. Duplicate matching hashes file contents locally; filenames and file contents are not uploaded or saved in reports. Potentially recoverable duplicate space is an estimate and does not imply that removing any copy is safe.
 - The tool does **not** clean Desktop, Documents, Downloads, pictures, browser cookies/passwords/history, registry settings, Windows Prefetch, or installed programs.
 - Reparse points / symlink files and folders are skipped; the approved cleanup root is never removed. Only empty child directories are removed.
 - Age check: 48+ hours by default, but app caches/crash reports might still be useful. Close work applications and use preview before cleanup.

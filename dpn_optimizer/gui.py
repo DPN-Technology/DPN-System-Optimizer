@@ -15,7 +15,7 @@ from typing import Any, Callable
 from . import __version__
 from .cleaner import CATEGORIES, DEFAULT_CATEGORIES, human_bytes, list_reports, reports_path, run_cleanup
 from .diagnostics import performance_advice, performance_health_score, performance_snapshot
-from .diskmap import scan_disk_usage
+from .diskmap import scan_disk_usage, scan_file_insights
 from .startup import list_startup_items
 from . import scheduler, health
 
@@ -54,6 +54,8 @@ class DPNWindow:
         self.busy = False
         self._poll_job = None
         self.cancel_flag = threading.Event()
+        self.insight_busy = False
+        self.insight_cancel = threading.Event()
         self.page = "Dashboard"
         self.buttons: dict[str, tk.Button] = {}
         self.nav_icons: dict[str, tk.Label] = {}
@@ -90,6 +92,13 @@ class DPNWindow:
         ])
         sty.configure("DPN.Horizontal.TProgressbar", background=RED, troughcolor=PANEL2,
                       bordercolor=PANEL, lightcolor=RED, darkcolor=RED)
+        sty.configure("DPN.TNotebook", background=BG, borderwidth=0, tabmargins=0)
+        sty.configure("DPN.TNotebook.Tab", background=PANEL, foreground=MUTED,
+                      padding=(14, 9), borderwidth=0,
+                      font=("Segoe UI Semibold", 8))
+        sty.map("DPN.TNotebook.Tab",
+                background=[("selected", PANEL2), ("active", HOVER)],
+                foreground=[("selected", RED), ("active", WHITE)])
         sty.configure("TCombobox", fieldbackground=PANEL2, background=PANEL2, foreground=WHITE,
                       arrowcolor=RED, bordercolor=LINE, lightcolor=PANEL2, darkcolor=PANEL2)
         sty.map("TCombobox", fieldbackground=[("readonly", PANEL2)],
@@ -168,10 +177,11 @@ class DPNWindow:
         tk.Frame(self.sidebar, bg=LINE, height=1).pack(fill="x", padx=18, pady=(0, 13))
         nav = tk.Frame(self.sidebar, bg=SIDE)
         nav.pack(fill="x", padx=9)
-        tabs = ("Dashboard", "Cleaner", "Disk Map", "Startup", "Automation", "Windows Health", "Reports")
+        tabs = ("Dashboard", "Cleaner", "Disk Map", "File Finder", "Startup",
+                "Automation", "Windows Health", "Reports")
         for index, tab in enumerate(tabs, start=1):
-            row = tk.Frame(nav, bg=SIDE, height=42)
-            row.pack(fill="x", pady=2)
+            row = tk.Frame(nav, bg=SIDE, height=38)
+            row.pack(fill="x", pady=1)
             row.pack_propagate(False)
             mark = tk.Frame(row, bg=SIDE, width=3)
             mark.pack(side="left", fill="y")
@@ -228,6 +238,7 @@ class DPNWindow:
         self._dashboard(self.pages["Dashboard"])
         self._cleaner(self.pages["Cleaner"])
         self._disk_map(self.pages["Disk Map"])
+        self._file_finder(self.pages["File Finder"])
         self._startup(self.pages["Startup"])
         self._automation(self.pages["Automation"])
         self._health(self.pages["Windows Health"])
@@ -510,6 +521,198 @@ class DPNWindow:
                                          (320, 90, 140), height=9)
         self._text(page, "Metrics are samples, not proof of sustained performance problems. psutil enables CPU and process monitoring.",
                    9, MUTED).pack(anchor="w", pady=(10, 0))
+
+    def _file_finder(self, page: tk.Frame) -> None:
+        self._page_title(
+            page, "Duplicate & Large File Finder",
+            "Find exact duplicate content and review the biggest files. Scan only; this tool never deletes.",
+        )
+        controls = self._panel(page, 14, 11)
+        controls.pack(fill="x")
+        row = tk.Frame(controls, bg=PANEL)
+        row.pack(fill="x")
+        self._text(row, "SCAN LOCATION", 8, MUTED, True).pack(side="left")
+        self.insight_location = tk.StringVar(value="User profile")
+        ttk.Combobox(
+            row, textvariable=self.insight_location, state="readonly", width=23,
+            values=list(self.disk_locations),
+        ).pack(side="left", padx=(9, 18))
+        self._text(row, "MIN SIZE", 8, MUTED, True).pack(side="left")
+        self.insight_min_mb = tk.StringVar(value="1")
+        tk.Entry(row, width=5, textvariable=self.insight_min_mb, bg=PANEL2, fg=WHITE,
+                 insertbackground=WHITE, bd=0, relief="flat",
+                 font=("Consolas", 10)).pack(side="left", padx=(9, 5))
+        self._text(row, "MB", 8, MUTED, True).pack(side="left")
+        self.insight_scan_button = self._button(
+            row, "Analyze Files", self._start_file_insight_scan, primary=True
+        )
+        self.insight_scan_button.pack(side="left", padx=(16, 0))
+        self.insight_stop_button = self._button(row, "Stop Scan", self.insight_cancel.set)
+        self.insight_stop_button.pack(side="left", padx=(7, 0))
+        self.insight_stop_button.configure(state="disabled")
+        self.insight_status = self._text(controls, "Ready for a local scan.", 8, MUTED)
+        self.insight_status.pack(anchor="w", fill="x", pady=(8, 0))
+
+        self.insight_summary = self._text(
+            page, "SHA-256 exact-match detection  ·  reparse points skipped  ·  bounded scan",
+            8, MUTED, True
+        )
+        self.insight_summary.pack(anchor="w", pady=(10, 8))
+
+        notebook = ttk.Notebook(page, style="DPN.TNotebook")
+        notebook.pack(fill="both", expand=True)
+        duplicate_tab = tk.Frame(notebook, bg=BG, padx=3, pady=9)
+        large_tab = tk.Frame(notebook, bg=BG, padx=3, pady=9)
+        notebook.add(duplicate_tab, text="  DUPLICATE GROUPS  ")
+        notebook.add(large_tab, text="  LARGEST FILES  ")
+
+        dup_panel = self._panel(duplicate_tab, 12, 10)
+        dup_panel.pack(fill="both", expand=True)
+        self._text(dup_panel, "EXACT CONTENT MATCHES", 9, RED, True).pack(anchor="w")
+        self.duplicate_table = self._make_tree(
+            dup_panel, ("Potentially reclaimable", "Copies", "File size", "Sample path"),
+            (155, 70, 110, 510), height=12
+        )
+        duplicate_vertical = ttk.Scrollbar(
+            dup_panel, orient="vertical", command=self.duplicate_table.yview
+        )
+        duplicate_vertical.pack(side="right", fill="y")
+        duplicate_scroll = ttk.Scrollbar(
+            dup_panel, orient="horizontal", command=self.duplicate_table.xview
+        )
+        duplicate_scroll.pack(fill="x", pady=(5, 0))
+        self.duplicate_table.configure(
+            xscrollcommand=duplicate_scroll.set, yscrollcommand=duplicate_vertical.set
+        )
+        self.duplicate_table.bind("<<TreeviewSelect>>", self._select_duplicate_group)
+        self.duplicate_detail = tk.Text(
+            dup_panel, height=5, bg=PANEL2, fg=MUTED, bd=0,
+            font=("Consolas", 8), wrap="word", state="disabled"
+        )
+        self.duplicate_detail.pack(fill="x", pady=(10, 0))
+        self.duplicate_results: list[dict[str, Any]] = []
+
+        large_panel = self._panel(large_tab, 12, 10)
+        large_panel.pack(fill="both", expand=True)
+        header = tk.Frame(large_panel, bg=PANEL)
+        header.pack(fill="x")
+        self._text(header, "LARGEST FILES IN SELECTED LOCATION", 9, RED, True).pack(side="left")
+        self._button(header, "Open Selected Folder", self._open_insight_file_folder).pack(side="right")
+        self.large_file_table = self._make_tree(
+            large_panel, ("Size", "Path"), (110, 700), height=16
+        )
+        large_vertical = ttk.Scrollbar(
+            large_panel, orient="vertical", command=self.large_file_table.yview
+        )
+        large_vertical.pack(side="right", fill="y")
+        large_scroll = ttk.Scrollbar(
+            large_panel, orient="horizontal", command=self.large_file_table.xview
+        )
+        large_scroll.pack(fill="x", pady=(5, 0))
+        self.large_file_table.configure(
+            xscrollcommand=large_scroll.set, yscrollcommand=large_vertical.set
+        )
+        self.large_file_paths: dict[str, str] = {}
+
+    def _start_file_insight_scan(self) -> None:
+        if self.insight_busy:
+            return
+        root = self.disk_locations[self.insight_location.get()]
+        if not root.is_dir():
+            messagebox.showwarning("Location unavailable", f"{root} was not found.")
+            return
+        try:
+            min_size = int(self.insight_min_mb.get()) * 1024 * 1024
+            if not 1 <= int(self.insight_min_mb.get()) <= 1024:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("Invalid minimum size", "Enter a whole number from 1 to 1024 MB.")
+            return
+
+        self.insight_busy = True
+        self.insight_cancel.clear()
+        self.insight_scan_button.configure(state="disabled")
+        self.insight_stop_button.configure(state="normal")
+        self.insight_status.configure(text="Indexing files…", fg=RED)
+        self.insight_summary.configure(text="Indexing candidate files. Content is hashed only for same-size matches.")
+
+        def worker() -> None:
+            try:
+                result = scan_file_insights(
+                    root, min_size=min_size, cancelled=self.insight_cancel.is_set,
+                    progress=lambda count, phase: self.events.put(
+                        ("insight_progress", (count, phase))
+                    ),
+                )
+                self.events.put(("insight_done", result))
+            except Exception as exc:
+                self.events.put(("insight_error", f"File analysis failed: {exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_file_insight_result(self, result: dict[str, Any]) -> None:
+        self.duplicate_results = result["duplicates"]
+        self.duplicate_table.delete(*self.duplicate_table.get_children())
+        for index, group in enumerate(self.duplicate_results):
+            self.duplicate_table.insert(
+                "", "end", iid=str(index),
+                values=(human_bytes(group["reclaimable_bytes"]), len(group["paths"]),
+                        human_bytes(group["bytes_each"]), group["paths"][0]),
+            )
+        self.duplicate_detail.configure(state="normal")
+        self.duplicate_detail.delete("1.0", "end")
+        self.duplicate_detail.insert(
+            "end", "Select a duplicate group to inspect every matching path. "
+                   "No files are modified."
+        )
+        self.duplicate_detail.configure(state="disabled")
+
+        self.large_file_table.delete(*self.large_file_table.get_children())
+        self.large_file_paths = {}
+        for item in result["largest_files"]:
+            row = self.large_file_table.insert(
+                "", "end", values=(human_bytes(item["bytes"]), item["path"])
+            )
+            self.large_file_paths[row] = item["path"]
+
+        partial = " · PARTIAL SCAN" if result["truncated"] else ""
+        self.insight_status.configure(
+            text=f"{result['files_seen']:,} files · {result['errors']} unreadable{partial}",
+            fg=RED if result["truncated"] else MUTED,
+        )
+        self.insight_summary.configure(
+            text=(f"{result['duplicate_groups']} exact-match groups  ·  "
+                  f"{human_bytes(result['reclaimable_bytes'])} potentially reclaimable  ·  "
+                  f"{result['files_hashed']:,} files hashed  ·  estimates only; review before action")
+        )
+        self.insight_busy = False
+        self.insight_scan_button.configure(state="normal")
+        self.insight_stop_button.configure(state="disabled")
+
+    def _select_duplicate_group(self, _event: Any) -> None:
+        selected = self.duplicate_table.selection()
+        if not selected:
+            return
+        try:
+            group = self.duplicate_results[int(selected[0])]
+        except (IndexError, ValueError):
+            return
+        self.duplicate_detail.configure(state="normal")
+        self.duplicate_detail.delete("1.0", "end")
+        self.duplicate_detail.insert(
+            "end", f"SHA-256: {group['sha256']}\n"
+                   f"Potentially reclaimable: {human_bytes(group['reclaimable_bytes'])}\n"
+                   + "\n".join(group["paths"])
+        )
+        self.duplicate_detail.configure(state="disabled")
+
+    def _open_insight_file_folder(self) -> None:
+        selected = self.large_file_table.selection()
+        if not selected or os.name != "nt":
+            return
+        path = Path(self.large_file_paths.get(selected[0], ""))
+        if path.parent.is_dir():
+            os.startfile(path.parent)  # type: ignore[attr-defined]  # opens the folder only
 
     def _cleaner(self, page: tk.Frame) -> None:
         self._page_title(page, "Selective Storage Cleanup",
@@ -996,6 +1199,18 @@ class DPNWindow:
             elif event == "disk_error":
                 self._finish_disk_scan()
                 self.disk_status.configure(text=payload, fg=RED)
+            elif event == "insight_progress":
+                count, phase = payload
+                self.insight_status.configure(
+                    text=f"{phase.title()}… {count:,} files", fg=RED
+                )
+            elif event == "insight_done":
+                self._show_file_insight_result(payload)
+            elif event == "insight_error":
+                self.insight_busy = False
+                self.insight_scan_button.configure(state="normal")
+                self.insight_stop_button.configure(state="disabled")
+                self.insight_status.configure(text=payload, fg=RED)
             elif event == "health_done":
                 code, output = payload
                 self.health_text.configure(state="normal")
@@ -1014,6 +1229,7 @@ class DPNWindow:
                 return
             self.cancel_flag.set()
         self.disk_cancel.set()
+        self.insight_cancel.set()
         self.root.destroy()
 
     def run(self) -> None:
