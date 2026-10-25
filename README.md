@@ -19,11 +19,16 @@ System Optimizer is a local-first Windows maintenance tool with a red-and-black 
 
 | Module | Implemented behavior |
 | --- | --- |
-| Performance dashboard | Sampled CPU usage with psutil, RAM, disk, top processes by RAM, guidance. Updates every 5 seconds while GUI is open. |
+| DPN desktop interface | Branded black-and-red control center with an animated binary boot console, a live status header, numbered module navigation, and responsive centered window sizing. The startup progress is an intro animation, not a timed hardware diagnostic. |
+| Appearance & motion | The header's **Appearance** button controls binary rain, Low/Standard/High intensity, reduced motion, and the startup intro. Settings apply on save and persist locally. Reduced motion disables the animated banner and skips the intro; diagnostic sampling and operation progress indicators still work. |
+| Performance dashboard | Sampled CPU usage with psutil, RAM, disk, top processes by RAM, guidance, two-minute sparklines, and a snapshot headroom score. Updates every 5 seconds while GUI is open. The score averages available CPU, RAM, and disk headroom; it is not a diagnosis or long-term health rating. |
+| Process Explorer | Optional psutil-backed local process snapshot with CPU, RAM, owner, executable path, and status, plus filtering. Ending a process is a separate, explicit confirmation; only processes verified as belonging to the current user and outside protected Windows locations are eligible. Windows termination is immediate, so unsaved work may be lost. |
 | User temp cleaner | Ages files before eligibility (default 48 hours); skips recently changed files, symlinks/junctions, inaccessible/locked files. |
 | Optional cache cleanup | DirectX shader cache; explicitly selected Windows Error Reporting files and user crash dumps; Chrome/Edge *cache files only* if all browsers are closed. |
 | Windows temp | Explicitly selected; may require admin. Never on by default. |
-| Startup analyzer | Read-only inventory of Run/RunOnce values and Startup-folder files, including machine-wide keys when accessible. |
+| Disk Space Map | Read-only scan of your user profile, Downloads, Documents, or system drive that ranks the largest folders with bar charts and lists the 25 largest files, with an *Open Folder* button. Symlinks/junctions are never followed, the scan can be stopped, and system-drive scans stop after 45 seconds (results are then marked partial). It never deletes or changes anything. |
+| Duplicate & Large File Finder | Read-only SHA-256 duplicate matching and largest-file ranking across the selected profile, Documents, Downloads, or system drive. Same-size candidates only are hashed; the minimum size defaults to 1 MB. Scan is cancellable and bounded to 90 seconds or 50,000 candidates. Reparse points are skipped, changed/unreadable files are not trusted, and hard links are not counted as recoverable space. Potential savings are estimates; no files are deleted or modified. |
+| Startup analyzer | Read-only inventory of Run/RunOnce values and Startup-folder files, including machine-wide keys when accessible. Recognizable sync, chat, and launcher apps are flagged as potentially high impact using a cautious name-based heuristic; it does not measure boot time or verify publisher signatures, so publisher status is shown as unknown. |
 | Windows health | Manually triggered `sfc /verifyonly` or `DISM /Online /Cleanup-Image /ScanHealth`, no automatic repair. |
 | Scheduler | Opt-in task using Windows Task Scheduler. Daily **user temp only**, 48+ hours old, limited privileges; you specify its local time. |
 | Local reports | A JSON file per preview/cleanup showing category counts and deleted bytes; no individual scanned filenames or content. |
@@ -31,7 +36,9 @@ System Optimizer is a local-first Windows maintenance tool with a red-and-black 
 ### Important safety notes
 
 - Preview-only is the default. **Deletion is permanent after you explicitly approve it.** It does not use the Recycle Bin.
+- The Process Explorer never ends processes automatically. Its explicit end action can immediately close an application and lose unsaved work; protected Windows processes, unverified identities, and processes owned by other users are denied.
 - The only default cleanup category is user temp. Other categories must be opted into.
+- Disk Map and File Finder are read-only. Duplicate matching hashes file contents locally; filenames and file contents are not uploaded or saved in reports. Potentially recoverable duplicate space is an estimate and does not imply that removing any copy is safe.
 - The tool does **not** clean Desktop, Documents, Downloads, pictures, browser cookies/passwords/history, registry settings, Windows Prefetch, or installed programs.
 - Reparse points / symlink files and folders are skipped; the approved cleanup root is never removed. Only empty child directories are removed.
 - Age check: 48+ hours by default, but app caches/crash reports might still be useful. Close work applications and use preview before cleanup.
@@ -49,6 +56,7 @@ In PowerShell, open the extracted folder and run:
 ```powershell
 py -3 dpn_system_optimizer.py --help
 py -3 dpn_system_optimizer.py diagnose
+py -3 dpn_system_optimizer.py diagnose --json  # machine-readable output for automation
 py -3 dpn_system_optimizer.py startup
 py -3 dpn_system_optimizer.py preview
 py -3 dpn_system_optimizer.py preview --categories user_temp shader_cache --age-hours 72
@@ -65,6 +73,9 @@ py -3 dpn_system_optimizer.py health dism-scan
 **Warning:** `clean` *without* `--apply` is a preview and deletes nothing. Browser caches are skipped when either Chrome or Edge are active.
 
 ## Reports and privacy
+
+Appearance preferences are stored in `%LOCALAPPDATA%\DPN Technology\System Optimizer\appearance.json`.
+Missing preferences use the default DPN theme; unreadable or invalid preferences trigger a visible warning rather than being silently overwritten.
 
 Reports are stored at:
 
@@ -103,6 +114,8 @@ Approved cleanup roots are enumerated by code; the user cannot supply an arbitra
 - `dpn_optimizer/startup.py` — startup inventory
 - `dpn_optimizer/scheduler.py` — optional Task Scheduler integration
 - `dpn_optimizer/health.py` — read-only Windows system verification
+- `dpn_optimizer/diskmap.py` — read-only disk space analysis
+- `dpn_optimizer/assets/` — DPN logo (sourced from the DPN-Technology GitHub organization avatar) in sizes used by the window icon, sidebar and splash
 - `dpn_optimizer/gui.py` — Tkinter desktop interface
 - `dpn_optimizer/cli.py` — commands
 - `START_DPN_OPTIMIZER.bat` — GUI launcher
